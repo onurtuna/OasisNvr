@@ -104,6 +104,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/hls/{camera_id}/vod.m3u8", get(handle_hls_vod))
         .route("/api/hls/{camera_id}/segment/ts/{segment_id}", get(handle_hls_segment))
         .route("/api/hls/{camera_id}/player", get(handle_hls_player))
+        .route("/api/hls/{camera_id}/vod/player", get(handle_vod_player))
         // Camera management
         .route("/api/cameras", get(handle_list_cameras).post(handle_add_camera))
         .route("/api/cameras/{camera_id}", delete(handle_remove_camera))
@@ -469,6 +470,70 @@ if (Hls.isSupported()) {{
 </script>
 </body>
 </html>"#, camera_id = camera_id);
+
+    (
+        StatusCode::OK,
+        [("content-type", "text/html; charset=utf-8")],
+        html,
+    )
+}
+
+/// VOD web player — pass ?from=...&to=... query params.
+async fn handle_vod_player(
+    Path(camera_id): Path<String>,
+    raw_query: axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let qs = raw_query.0.unwrap_or_default();
+    let html = format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NVR VOD — {camera_id}</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<style>
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  body {{ background:#111; display:flex; flex-direction:column;
+         align-items:center; justify-content:center; min-height:100vh;
+         font-family:system-ui,sans-serif; color:#eee; }}
+  h1 {{ font-size:1.2rem; margin-bottom:12px; opacity:.7; }}
+  video {{ width:90vw; max-width:1280px; border-radius:8px;
+           background:#000; }}
+  #status {{ font-size:.85rem; margin-top:8px; opacity:.5; }}
+</style>
+</head>
+<body>
+<h1>🎬 {camera_id} — VOD</h1>
+<video id="v" controls autoplay muted playsinline></video>
+<div id="status">Loading…</div>
+<script>
+const src = "../vod.m3u8?{qs}";
+const video = document.getElementById("v");
+const status = document.getElementById("status");
+
+if (Hls.isSupported()) {{
+  const hls = new Hls({{ enableWorker: true }});
+  hls.loadSource(src);
+  hls.attachMedia(video);
+  hls.on(Hls.Events.MANIFEST_PARSED, () => {{
+    status.textContent = "Playing (HLS.js)";
+    video.play().catch(() => {{}});
+  }});
+  hls.on(Hls.Events.ERROR, (_, data) => {{
+    status.textContent = "Error: " + data.details;
+  }});
+}} else if (video.canPlayType("application/vnd.apple.mpegurl")) {{
+  video.src = src;
+  video.addEventListener("loadedmetadata", () => {{
+    status.textContent = "Playing (native)";
+    video.play().catch(() => {{}});
+  }});
+}} else {{
+  status.textContent = "HLS not supported in this browser";
+}}
+</script>
+</body>
+</html>"#, camera_id = camera_id, qs = qs);
 
     (
         StatusCode::OK,

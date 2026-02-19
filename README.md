@@ -69,8 +69,11 @@ While recording, the HTTP API is available at `http://localhost:8080`:
 | `GET /api/status` | System status — pools, segments, cameras (JSON) |
 | `GET /api/list?camera=cam1` | Segment list for a camera (JSON) |
 | `GET /api/export?camera=cam1&from=...&to=...` | Download `.ts` file for a time range |
-| `GET /api/hls/{camera}/live.m3u8` | LL-HLS live playlist (low-latency) |
+| `GET /api/hls/{camera}/live.m3u8` | HLS live playlist |
 | `GET /api/hls/{camera}/vod.m3u8?from=...&to=...` | VOD playlist for a time range |
+| `GET /api/hls/{camera}/segment/ts/{id}` | Individual segment data (MPEG-TS) |
+| `GET /api/hls/{camera}/player` | 🖥 Live video player (browser) |
+| `GET /api/hls/{camera}/vod/player?from=...&to=...` | 🖥 VOD video player (browser) |
 | `GET /api/cameras` | List active cameras |
 | `POST /api/cameras` | Add a camera at runtime (JSON body) |
 | `DELETE /api/cameras/{id}` | Remove a camera at runtime |
@@ -78,30 +81,32 @@ While recording, the HTTP API is available at `http://localhost:8080`:
 ### Examples
 
 ```bash
-# System status
+# ── Watch live in any browser ─────────────────────────────────────
+open http://localhost:8080/api/hls/cam1/player
+
+# ── Watch recorded video in any browser (1 minute) ────────────────
+open "http://localhost:8080/api/hls/cam1/vod/player?from=2026-02-19T23:00:00&to=2026-02-19T23:01:00"
+
+# ── VLC playback ──────────────────────────────────────────────────
+vlc http://localhost:8080/api/hls/cam1/live.m3u8
+vlc "http://localhost:8080/api/hls/cam1/vod.m3u8?from=2026-02-19T23:00:00&to=2026-02-19T23:01:00"
+
+# ── System status ─────────────────────────────────────────────────
 curl http://localhost:8080/api/status | jq
 
-# List segments for a camera
+# ── List segments ─────────────────────────────────────────────────
 curl "http://localhost:8080/api/list?camera=cam1" | jq
 
-# Export 1 hour of video
+# ── Export 1 hour to file ─────────────────────────────────────────
 curl -o kayit.ts "http://localhost:8080/api/export?camera=cam1&from=2026-02-19T14:00:00&to=2026-02-19T15:00:00"
 
-# Watch live in VLC
-vlc http://localhost:8080/api/hls/cam1/live.m3u8
-
-# Watch recorded video in VLC
-vlc "http://localhost:8080/api/hls/cam1/vod.m3u8?from=2026-02-19T14:00:00&to=2026-02-19T15:00:00"
-
-# List active cameras
+# ── Camera management (hot add/remove) ───────────────────────────
 curl http://localhost:8080/api/cameras | jq
 
-# Add a camera at runtime (no restart needed)
 curl -X POST http://localhost:8080/api/cameras \
   -H "Content-Type: application/json" \
   -d '{"id":"cam5","name":"Garden","url":"rtsp://user:pass@192.168.1.15:554/stream1","max_reconnect_attempts":0}'
 
-# Remove a camera at runtime
 curl -X DELETE http://localhost:8080/api/cameras/cam5
 ```
 

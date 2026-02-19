@@ -1,0 +1,45 @@
+# NVR Example Configuration
+# Copy to config.toml and fill in your camera URLs.
+
+[storage]
+# Directory where global pool files will be stored.
+# TIP: mount a dedicated HDD here for best performance.
+base_path = "./recordings"
+
+# Size of each pre-allocated pool file in megabytes.
+# ALL cameras share these pool files (sequential I/O, HDD friendly).
+# Larger = fewer file rotations, better throughput.
+chunk_size_mb = 512
+
+# Number of pool files in the ring buffer.
+# Total storage = chunk_size_mb × max_pools
+# Example: 512 MB × 20 = 10 GB total for ALL cameras
+max_pools = 20
+
+# Duration of a single video segment in seconds.
+# Shorter = finer-grained time resolution.
+segment_duration_secs = 60
+
+# Bounded queue size for the global writer.
+# 256 is a good default; increase for many cameras.
+writer_queue_size = 256
+
+# --- Camera definitions -------------------------------------------------------
+
+[[cameras]]
+id = "cam1"
+name = "Front Door"
+url = "rtsp://192.168.1.10:554/stream1"
+max_reconnect_attempts = 0
+
+[[cameras]]
+id = "cam2"
+name = "Backyard"
+url = "rtsp://192.168.1.11:554/stream1"
+max_reconnect_attempts = 0
+
+[[cameras]]
+id = "cam3"
+name = "Garage"
+url = "rtsp://admin:password@192.168.1.12/Streaming/Channels/101"
+max_reconnect_attempts = 5

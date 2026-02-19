@@ -1,0 +1,21 @@
+# Build artifacts
+/target/
+
+# Recordings data
+/recordings/
+
+# User config (contains credentials)
+config.toml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Gemini artifacts
+.gemini/

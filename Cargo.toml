@@ -1,0 +1,52 @@
+[package]
+name = "nvr"
+version = "0.1.0"
+edition = "2021"
+description = "Network Video Recorder with ring buffer storage"
+authors = []
+
+[[bin]]
+name = "nvr"
+path = "src/main.rs"
+
+[lib]
+name = "nvr"
+path = "src/lib.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+
+# GStreamer
+gstreamer = "0.23"
+gstreamer-app = "0.23"
+gstreamer-video = "0.23"
+
+# Config & serialization
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+serde_json = "1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging & tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Binary serialization (for chunk format)
+byteorder = "1"
+
+# Fast read-write lock
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,10 +1,9 @@
 //! Segment index — maps (camera_id, time_range) → SegmentLocation.
 //!
-//! Kept entirely in memory during a recording session.
-//! When a pool slot is rotated (overwritten) its index entries are evicted.
-//!
-//! For persistence across restarts the index can later be serialised to
-//! `index.bin`; the initial version keeps it in-memory only.
+//! The index lives in memory during a recording session but is **persistent**:
+//! on startup, pool files are scanned sequentially and the index is rebuilt
+//! from the RecordHeaders already embedded in the data stream. No separate
+//! index file is written, so recording I/O remains purely sequential.
 
 use std::collections::BTreeMap;
 
@@ -97,5 +96,21 @@ impl SegmentIndex {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Rebuild the index from records recovered by scanning pool files.
+    /// Called once on startup; zero disk I/O of its own.
+    pub fn rebuild_from_scanned(&mut self, records: Vec<crate::storage::chunk_pool::ScannedRecord>) {
+        self.entries.clear();
+        self.segment_counter = 0;
+        for r in records {
+            let loc = crate::storage::chunk_pool::SegmentLocation {
+                pool_idx: r.pool_idx,
+                pool_id: r.pool_id,
+                record_offset: r.record_offset,
+                record_size: r.record_size,
+            };
+            self.insert(&r.camera_id, r.start_ts, r.end_ts, loc);
+        }
     }
 }

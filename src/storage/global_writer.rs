@@ -41,6 +41,10 @@ pub type SharedIndex = Arc<RwLock<SegmentIndex>>;
 
 /// Create the writer channel and spawn the writer task.
 ///
+/// On startup the pool files are scanned sequentially to rebuild the
+/// in-memory segment index from existing RecordHeaders. This makes
+/// the index persistent across restarts — no separate index file needed.
+///
 /// Returns:
 ///   - `mpsc::Sender<WriteRequest>` — hand out clones to each camera worker.
 ///   - `SharedIndex` — read-only handle for status / listing.
@@ -69,6 +73,20 @@ async fn writer_loop(
     mut rx: mpsc::Receiver<WriteRequest>,
     index: SharedIndex,
 ) {
+    // Rebuild index from existing pool data (sequential scan, one-time).
+    match pool.scan_all_pools() {
+        Ok(records) => {
+            let count = records.len();
+            index.write().rebuild_from_scanned(records);
+            if count > 0 {
+                info!(recovered = count, "Index rebuilt from pool files");
+            }
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to scan pool files, starting with empty index");
+        }
+    }
+
     info!("GlobalChunkWriter started");
 
     while let Some(req) = rx.recv().await {

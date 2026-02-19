@@ -158,3 +158,35 @@ async fn test_global_writer_end_to_end() {
     assert_eq!(idx.segments_for_camera("cam0").len(), 3);
     assert_eq!(idx.segments_for_camera("cam1").len(), 2);
 }
+
+#[test]
+fn test_restart_recovery() {
+    // Simulate: write some data, "crash" (drop pool), reopen, verify index rebuilt.
+    let dir = tmp_dir();
+    let pool_size: u64 = 1024 * 1024;
+
+    // Phase 1: write segments.
+    {
+        let mut pool = ChunkPool::open(dir.path(), pool_size, 3).expect("open");
+        let now = Utc::now();
+        for i in 0..5 {
+            let cam = format!("cam{}", i % 2);
+            pool.append(&cam, now, now, &vec![0xABu8; 100]).expect("append");
+        }
+        // Pool dropped here — simulates NVR crash/restart.
+    }
+
+    // Phase 2: reopen and scan.
+    {
+        let pool = ChunkPool::open(dir.path(), pool_size, 3).expect("reopen");
+        let records = pool.scan_all_pools().expect("scan");
+        assert_eq!(records.len(), 5, "Should recover all 5 records from disk");
+
+        // Rebuild index from scanned records.
+        let mut index = SegmentIndex::new();
+        index.rebuild_from_scanned(records);
+        assert_eq!(index.len(), 5);
+        assert_eq!(index.segments_for_camera("cam0").len(), 3);
+        assert_eq!(index.segments_for_camera("cam1").len(), 2);
+    }
+}

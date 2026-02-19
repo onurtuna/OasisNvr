@@ -25,12 +25,12 @@
 //! ```
 
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Seek, SeekFrom, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use byteorder::{LittleEndian, WriteBytesExt};
-use chrono::{DateTime, Utc};
-use tracing::{info, warn};
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use chrono::{DateTime, TimeZone, Utc};
+use tracing::{debug, info, warn};
 
 use crate::error::{NvrError, Result};
 
@@ -53,6 +53,18 @@ pub struct SegmentLocation {
     /// Byte offset of the `NREC` magic within the pool file.
     pub record_offset: u64,
     /// Total byte length of the record (header + data).
+    pub record_size: u64,
+}
+
+/// A record recovered from scanning a pool file on startup.
+#[derive(Debug, Clone)]
+pub struct ScannedRecord {
+    pub camera_id: String,
+    pub start_ts: DateTime<Utc>,
+    pub end_ts: DateTime<Utc>,
+    pub pool_idx: usize,
+    pub pool_id: u64,
+    pub record_offset: u64,
     pub record_size: u64,
 }
 
@@ -79,11 +91,17 @@ pub struct ChunkPool {
 
 impl ChunkPool {
     /// Open (or create + pre-allocate) all pool files.
+    /// If pool files already exist, scans their headers to determine
+    /// which pool was last written to and resumes from there.
     pub fn open(base_path: &Path, pool_size_bytes: u64, max_pools: usize) -> Result<Self> {
         std::fs::create_dir_all(base_path)
             .map_err(|e| NvrError::Storage(format!("Cannot create storage dir: {e}")))?;
 
         let mut slots = Vec::with_capacity(max_pools);
+        let mut best_idx: usize = 0;
+        let mut best_pool_id: u64 = 0;
+        let mut any_existing = false;
+
         for i in 0..max_pools {
             let path = base_path.join(format!("pool_{:03}.bin", i));
             if !path.exists() {
@@ -92,18 +110,37 @@ impl ChunkPool {
                 f.set_len(total)
                     .map_err(|e| NvrError::Storage(format!("preallocate {path:?}: {e}")))?;
                 info!(pool = i, path = ?path, size_mb = total / 1_048_576, "Pre-allocated pool file");
+                slots.push(PoolSlot { path, pool_id: i as u64, bytes_used: 0 });
+            } else {
+                any_existing = true;
+                // Read pool header to recover pool_id and detect latest.
+                let (pid, _created) = Self::read_pool_header(&path)?;
+                // Scan records to find bytes_used.
+                let records = Self::scan_records(&path, i, pid, pool_size_bytes)?;
+                let bytes_used: u64 = records.iter().map(|r| r.record_size).sum();
+                if pid >= best_pool_id {
+                    best_pool_id = pid;
+                    best_idx = i;
+                }
+                info!(pool = i, pool_id = pid, records = records.len(), bytes_used, "Recovered pool file");
+                slots.push(PoolSlot { path, pool_id: pid, bytes_used });
             }
-            slots.push(PoolSlot { path, pool_id: i as u64, bytes_used: 0 });
         }
+
+        let write_idx = if any_existing { best_idx } else { 0 };
 
         let pool = ChunkPool {
             base_path: base_path.to_path_buf(),
             pool_capacity: pool_size_bytes,
             slots,
-            write_idx: 0,
+            write_idx,
         };
-        // Write header into the first pool slot.
-        pool.write_pool_header(0)?;
+
+        if !any_existing {
+            pool.write_pool_header(0)?;
+        }
+
+        info!(write_idx, "ChunkPool opened");
         Ok(pool)
     }
 
@@ -202,4 +239,106 @@ impl ChunkPool {
 
     pub fn pool_count(&self) -> usize { self.slots.len() }
     pub fn pool_path(&self, idx: usize) -> &Path { &self.slots[idx].path }
+
+    // ───────────────────── pool file scanning ─────────────────────────────
+
+    /// Read the 64-byte PoolHeader from a file. Returns `(pool_id, created_at)`.
+    fn read_pool_header(path: &Path) -> Result<(u64, i64)> {
+        let mut f = BufReader::new(
+            File::open(path)
+                .map_err(|e| NvrError::Storage(format!("open {path:?}: {e}")))?,
+        );
+        let mut magic = [0u8; 8];
+        f.read_exact(&mut magic)?;
+        if &magic != POOL_MAGIC {
+            // Fresh or corrupt — treat as empty.
+            return Ok((0, 0));
+        }
+        let pool_id = f.read_u64::<LittleEndian>()?;
+        let created_at = f.read_i64::<LittleEndian>()?;
+        Ok((pool_id, created_at))
+    }
+
+    /// Sequentially scan all RecordHeaders in a pool file.
+    /// Returns a Vec of recovered records (metadata only, data is skipped).
+    pub fn scan_records(
+        path: &Path,
+        pool_idx: usize,
+        pool_id: u64,
+        pool_capacity: u64,
+    ) -> Result<Vec<ScannedRecord>> {
+        let mut f = BufReader::new(
+            File::open(path)
+                .map_err(|e| NvrError::Storage(format!("scan open {path:?}: {e}")))?,
+        );
+        f.seek(SeekFrom::Start(POOL_HEADER_SIZE))?;
+
+        let mut records = Vec::new();
+        let mut offset = POOL_HEADER_SIZE;
+        let limit = POOL_HEADER_SIZE + pool_capacity;
+
+        while offset + RECORD_HEADER_SIZE <= limit {
+            // Try to read record magic.
+            let mut magic = [0u8; 4];
+            if f.read_exact(&mut magic).is_err() {
+                break;
+            }
+            if &magic != RECORD_MAGIC {
+                // No more valid records (hit zero-fill or garbage).
+                break;
+            }
+
+            let mut cam_bytes = [0u8; 16];
+            f.read_exact(&mut cam_bytes)?;
+            let camera_id = std::str::from_utf8(&cam_bytes)
+                .unwrap_or("")
+                .trim_end_matches('\0')
+                .to_string();
+
+            let start_ts_unix = f.read_i64::<LittleEndian>()?;
+            let end_ts_unix = f.read_i64::<LittleEndian>()?;
+            let data_len = f.read_u32::<LittleEndian>()? as u64;
+
+            let record_size = RECORD_HEADER_SIZE + data_len;
+            if offset + record_size > limit {
+                break; // Partial record — don't trust.
+            }
+
+            let start_ts = Utc.timestamp_opt(start_ts_unix, 0)
+                .single()
+                .unwrap_or_else(Utc::now);
+            let end_ts = Utc.timestamp_opt(end_ts_unix, 0)
+                .single()
+                .unwrap_or_else(Utc::now);
+
+            records.push(ScannedRecord {
+                camera_id,
+                start_ts,
+                end_ts,
+                pool_idx,
+                pool_id,
+                record_offset: offset,
+                record_size,
+            });
+
+            // Skip over the data payload.
+            f.seek(SeekFrom::Current(data_len as i64))?;
+            offset += record_size;
+        }
+
+        debug!(path = ?path, records = records.len(), "Pool scan complete");
+        Ok(records)
+    }
+
+    /// Scan all pool files and return every recovered record, sorted by pool_id.
+    pub fn scan_all_pools(&self) -> Result<Vec<ScannedRecord>> {
+        let mut all = Vec::new();
+        for (i, slot) in self.slots.iter().enumerate() {
+            let recs = Self::scan_records(&slot.path, i, slot.pool_id, self.pool_capacity)?;
+            all.extend(recs);
+        }
+        // Sort by pool_id (chronological order across rotations).
+        all.sort_by_key(|r| (r.pool_id, r.record_offset));
+        Ok(all)
+    }
 }

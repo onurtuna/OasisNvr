@@ -102,6 +102,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // HLS endpoints
         .route("/api/hls/{camera_id}/live.m3u8", get(handle_hls_live))
         .route("/api/hls/{camera_id}/vod.m3u8", get(handle_hls_vod))
+        .route("/api/hls/{camera_id}/segment/ts/{segment_id}", get(handle_hls_segment))
+        .route("/api/hls/{camera_id}/player", get(handle_hls_player))
         // Camera management
         .route("/api/cameras", get(handle_list_cameras).post(handle_add_camera))
         .route("/api/cameras/{camera_id}", delete(handle_remove_camera))
@@ -398,6 +400,138 @@ async fn handle_hls_vod(
             StatusCode::NOT_FOUND,
             [("content-type", "text/plain")],
             format!("No segments found for camera '{}' in range", camera_id),
+        ).into_response(),
+    }
+}
+
+/// Inline HLS.js web player — works in all browsers.
+async fn handle_hls_player(
+    Path(camera_id): Path<String>,
+) -> impl IntoResponse {
+    let html = format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NVR — {camera_id}</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<style>
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  body {{ background:#111; display:flex; flex-direction:column;
+         align-items:center; justify-content:center; min-height:100vh;
+         font-family:system-ui,sans-serif; color:#eee; }}
+  h1 {{ font-size:1.2rem; margin-bottom:12px; opacity:.7; }}
+  video {{ width:90vw; max-width:1280px; border-radius:8px;
+           background:#000; }}
+  #status {{ font-size:.85rem; margin-top:8px; opacity:.5; }}
+</style>
+</head>
+<body>
+<h1>📹 {camera_id}</h1>
+<video id="v" controls autoplay muted playsinline></video>
+<div id="status">Connecting…</div>
+<script>
+const src = "live.m3u8";
+const video = document.getElementById("v");
+const status = document.getElementById("status");
+
+if (Hls.isSupported()) {{
+  const hls = new Hls({{
+    liveSyncDurationCount: 3,
+    liveMaxLatencyDurationCount: 6,
+    enableWorker: true,
+  }});
+  hls.loadSource(src);
+  hls.attachMedia(video);
+  hls.on(Hls.Events.MANIFEST_PARSED, () => {{
+    status.textContent = "Playing (HLS.js)";
+    video.play().catch(() => {{}});
+  }});
+  hls.on(Hls.Events.ERROR, (_, data) => {{
+    status.textContent = "Error: " + data.details;
+    if (data.fatal) {{
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {{
+        status.textContent += " — retrying…";
+        setTimeout(() => hls.startLoad(), 3000);
+      }}
+    }}
+  }});
+}} else if (video.canPlayType("application/vnd.apple.mpegurl")) {{
+  // Safari native HLS
+  video.src = src;
+  video.addEventListener("loadedmetadata", () => {{
+    status.textContent = "Playing (native)";
+    video.play().catch(() => {{}});
+  }});
+}} else {{
+  status.textContent = "HLS not supported in this browser";
+}}
+</script>
+</body>
+</html>"#, camera_id = camera_id);
+
+    (
+        StatusCode::OK,
+        [("content-type", "text/html; charset=utf-8")],
+        html,
+    )
+}
+
+/// Serve a single segment's raw MPEG-TS data by segment_id.
+async fn handle_hls_segment(
+    State(state): State<Arc<AppState>>,
+    Path((camera_id, segment_id)): Path<(String, u64)>,
+) -> impl IntoResponse {
+    // Find the segment in the index.
+    let seg = {
+        let idx = state.index.read();
+        idx.segments_for_camera(&camera_id)
+            .into_iter()
+            .find(|s| s.segment_id == segment_id)
+            .cloned()
+    };
+
+    let seg = match seg {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                [("content-type", "text/plain")],
+                Vec::from("Segment not found".as_bytes()),
+            ).into_response();
+        }
+    };
+
+    // Read segment data from pool.
+    let pool_bytes = state.config.storage.chunk_size_mb * 1024 * 1024;
+    let pool = match ChunkPool::open(
+        &state.config.storage.base_path,
+        pool_bytes,
+        state.config.storage.max_pools,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [("content-type", "text/plain")],
+                Vec::from(format!("Pool error: {e}").as_bytes()),
+            ).into_response();
+        }
+    };
+
+    // Acquire read guard to prevent pool rotation during read.
+    let _guard = state.read_counters.acquire(seg.location.pool_idx);
+
+    match pool.read_segment_data(&seg.location) {
+        Ok(data) => (
+            StatusCode::OK,
+            [("content-type", "video/mp2t")],
+            data,
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [("content-type", "text/plain")],
+            Vec::from(format!("Read error: {e}").as_bytes()),
         ).into_response(),
     }
 }

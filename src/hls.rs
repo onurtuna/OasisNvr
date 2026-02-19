@@ -1,10 +1,10 @@
-//! HLS playlist generation — live (LL-HLS) and VOD.
+//! HLS playlist generation — live and VOD.
 //!
 //! Endpoints served via the HTTP API:
-//!   GET /api/hls/{camera_id}/live.m3u8           → live sliding-window playlist (LL-HLS)
-//!   GET /api/hls/{camera_id}/live.m3u8?_HLS_msn=N  → blocking reload until segment N
+//!   GET /api/hls/{camera_id}/live.m3u8              → live sliding-window playlist
+//!   GET /api/hls/{camera_id}/live.m3u8?_HLS_msn=N   → blocking reload until segment N
 //!   GET /api/hls/{camera_id}/vod.m3u8?from=...&to=...  → VOD playlist for time range
-//!   GET /api/hls/{camera_id}/segment/{segment_id}.ts  → raw MPEG-TS segment data
+//!   GET /api/hls/{camera_id}/segment/{segment_id}.ts   → raw MPEG-TS segment data
 
 use std::fmt::Write as FmtWrite;
 
@@ -16,7 +16,10 @@ use crate::storage::index::{SegmentIndex, SegmentMeta};
 /// Number of segments to include in the live sliding-window playlist.
 const LIVE_WINDOW_SEGMENTS: usize = 10;
 
-/// Generate a live LL-HLS playlist for a camera.
+/// Generate a live HLS playlist for a camera.
+///
+/// Uses standard HLS with `CAN-BLOCK-RELOAD` for low-latency polling.
+/// Safari, VLC, HLS.js all support this format natively.
 ///
 /// If `block_msn` is specified and is greater than the current max segment_id,
 /// this function returns `None` — the caller should wait and retry.
@@ -48,16 +51,16 @@ pub fn generate_live_playlist(
 
     let mut m3u8 = String::with_capacity(2048);
     writeln!(m3u8, "#EXTM3U").unwrap();
-    writeln!(m3u8, "#EXT-X-VERSION:6").unwrap();
+    writeln!(m3u8, "#EXT-X-VERSION:3").unwrap();
     writeln!(m3u8, "#EXT-X-TARGETDURATION:{}", segment_duration_secs).unwrap();
     writeln!(m3u8, "#EXT-X-MEDIA-SEQUENCE:{}", first_seq).unwrap();
 
-    // LL-HLS server control.
+    // Server control: CAN-BLOCK-RELOAD for low-latency polling.
+    // HOLD-BACK tells the player to stay 3× target duration behind live edge.
     writeln!(
         m3u8,
-        "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,HOLD-BACK={}.0,PART-HOLD-BACK={:.1}",
-        segment_duration_secs * 3,
-        segment_duration_secs as f64 * 0.5,
+        "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,HOLD-BACK={:.1}",
+        segment_duration_secs as f64 * 3.0,
     )
     .unwrap();
 
@@ -66,19 +69,8 @@ pub fn generate_live_playlist(
         writeln!(m3u8, "#EXTINF:{:.3},", duration).unwrap();
         writeln!(
             m3u8,
-            "/api/hls/{}/segment/{}.ts",
-            camera_id, seg.segment_id
-        )
-        .unwrap();
-    }
-
-    // Preload hint for the next segment (LL-HLS).
-    if let Some(last) = window.last() {
-        let next_id = last.segment_id + 1;
-        writeln!(
-            m3u8,
-            "#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"/api/hls/{}/segment/{}.ts\"",
-            camera_id, next_id
+            "segment/ts/{}",
+            seg.segment_id
         )
         .unwrap();
     }
@@ -104,7 +96,7 @@ pub fn generate_vod_playlist(
 
     let mut m3u8 = String::with_capacity(2048);
     writeln!(m3u8, "#EXTM3U").unwrap();
-    writeln!(m3u8, "#EXT-X-VERSION:6").unwrap();
+    writeln!(m3u8, "#EXT-X-VERSION:3").unwrap();
     writeln!(m3u8, "#EXT-X-TARGETDURATION:{}", segment_duration_secs).unwrap();
     writeln!(m3u8, "#EXT-X-MEDIA-SEQUENCE:{}", first_seq).unwrap();
     writeln!(m3u8, "#EXT-X-PLAYLIST-TYPE:VOD").unwrap();
@@ -114,8 +106,8 @@ pub fn generate_vod_playlist(
         writeln!(m3u8, "#EXTINF:{:.3},", duration).unwrap();
         writeln!(
             m3u8,
-            "/api/hls/{}/segment/{}.ts",
-            camera_id, seg.segment_id
+            "segment/ts/{}",
+            seg.segment_id
         )
         .unwrap();
     }
@@ -134,14 +126,8 @@ fn segment_actual_duration(seg: &SegmentMeta, fallback_secs: u64) -> f64 {
 fn empty_live_playlist(segment_duration_secs: u64) -> String {
     let mut m3u8 = String::with_capacity(256);
     writeln!(m3u8, "#EXTM3U").unwrap();
-    writeln!(m3u8, "#EXT-X-VERSION:6").unwrap();
+    writeln!(m3u8, "#EXT-X-VERSION:3").unwrap();
     writeln!(m3u8, "#EXT-X-TARGETDURATION:{}", segment_duration_secs).unwrap();
     writeln!(m3u8, "#EXT-X-MEDIA-SEQUENCE:0").unwrap();
-    writeln!(
-        m3u8,
-        "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,HOLD-BACK={}.0",
-        segment_duration_secs * 3,
-    )
-    .unwrap();
     m3u8
 }

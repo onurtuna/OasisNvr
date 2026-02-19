@@ -27,6 +27,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use chrono::{DateTime, TimeZone, Utc};
@@ -87,6 +89,65 @@ pub struct ChunkPool {
     slots: Vec<PoolSlot>,
     /// Index of the pool currently being written.
     pub write_idx: usize,
+    /// Shared per-pool reader counters.
+    pub read_counters: Arc<PoolReadCounters>,
+}
+
+// ────────────── read safety ───────────────────────────────────────
+
+/// Per-pool atomic reader counters. Shared between the writer and all API
+/// handlers via `Arc`. When a reader is active on a pool, the writer will
+/// wait before rotating into that pool.
+pub struct PoolReadCounters {
+    counters: Vec<AtomicUsize>,
+}
+
+impl PoolReadCounters {
+    /// Create counters for `n` pools.
+    pub fn new(n: usize) -> Self {
+        let mut counters = Vec::with_capacity(n);
+        for _ in 0..n {
+            counters.push(AtomicUsize::new(0));
+        }
+        Self { counters }
+    }
+
+    /// Acquire a read lock on `pool_idx`. Returns a guard that auto-releases.
+    pub fn acquire(&self, pool_idx: usize) -> PoolReadGuard {
+        self.counters[pool_idx].fetch_add(1, Ordering::SeqCst);
+        PoolReadGuard {
+            counters: self as *const PoolReadCounters,
+            pool_idx,
+        }
+    }
+
+    /// Check if any reader holds `pool_idx`.
+    pub fn has_readers(&self, pool_idx: usize) -> bool {
+        self.counters[pool_idx].load(Ordering::SeqCst) > 0
+    }
+
+    fn release(&self, pool_idx: usize) {
+        self.counters[pool_idx].fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// RAII guard that decrements the per-pool reader count on drop.
+/// This ensures readers are always released even on error/panic.
+pub struct PoolReadGuard {
+    counters: *const PoolReadCounters,
+    pool_idx: usize,
+}
+
+// Safety: PoolReadCounters uses AtomicUsize which is Send+Sync.
+unsafe impl Send for PoolReadGuard {}
+unsafe impl Sync for PoolReadGuard {}
+
+impl Drop for PoolReadGuard {
+    fn drop(&mut self) {
+        // Safety: the Arc<PoolReadCounters> outlives all guards because
+        // both the writer and API share the same Arc.
+        unsafe { &*self.counters }.release(self.pool_idx);
+    }
 }
 
 impl ChunkPool {
@@ -129,11 +190,14 @@ impl ChunkPool {
 
         let write_idx = if any_existing { best_idx } else { 0 };
 
+        let read_counters = Arc::new(PoolReadCounters::new(max_pools));
+
         let pool = ChunkPool {
             base_path: base_path.to_path_buf(),
             pool_capacity: pool_size_bytes,
             slots,
             write_idx,
+            read_counters,
         };
 
         if !any_existing {
@@ -203,8 +267,24 @@ impl ChunkPool {
     }
 
     /// Rotate to the next pool file (ring wrap-around).
+    /// If readers are active on the target pool, spins briefly (up to 5s)
+    /// before proceeding to avoid data corruption during reads.
     fn rotate(&mut self) -> Result<()> {
         self.write_idx = (self.write_idx + 1) % self.slots.len();
+
+        // Wait for any readers on the target pool to finish.
+        let mut waited = 0u32;
+        while self.read_counters.has_readers(self.write_idx) && waited < 50 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            waited += 1;
+        }
+        if self.read_counters.has_readers(self.write_idx) {
+            warn!(
+                pool_idx = self.write_idx,
+                "Rotating despite active readers (timeout after 5s)"
+            );
+        }
+
         let num_slots = self.slots.len() as u64;
         let slot = &mut self.slots[self.write_idx];
         slot.pool_id += num_slots;
@@ -239,6 +319,23 @@ impl ChunkPool {
 
     pub fn pool_count(&self) -> usize { self.slots.len() }
     pub fn pool_path(&self, idx: usize) -> &Path { &self.slots[idx].path }
+
+    /// Read the raw MPEG-TS payload of a segment at the given location.
+    /// Returns only the data bytes (skips the 40-byte RecordHeader).
+    pub fn read_segment_data(&self, loc: &SegmentLocation) -> Result<Vec<u8>> {
+        let slot = &self.slots[loc.pool_idx];
+        let data_offset = loc.record_offset + RECORD_HEADER_SIZE;
+        let data_len = (loc.record_size - RECORD_HEADER_SIZE) as usize;
+
+        let mut f = BufReader::new(
+            File::open(&slot.path)
+                .map_err(|e| NvrError::Storage(format!("open pool {:?}: {e}", slot.path)))?,
+        );
+        f.seek(SeekFrom::Start(data_offset))?;
+        let mut buf = vec![0u8; data_len];
+        f.read_exact(&mut buf)?;
+        Ok(buf)
+    }
 
     // ───────────────────── pool file scanning ─────────────────────────────
 

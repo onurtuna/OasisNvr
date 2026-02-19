@@ -1,19 +1,24 @@
 //! NVR — Network Video Recorder
 //!
 //! Usage:
-//!   nvr record --config config.toml        # start recording all cameras
-//!   nvr status --config config.toml        # print status
+//!   nvr record --config config.toml
+//!   nvr status --config config.toml
 //!   nvr list   --config config.toml --camera cam1
+//!   nvr export --config config.toml --camera cam1 --from "2026-02-19T14:00:00" --to "2026-02-19T15:00:00" -o output.ts
 
 use std::path::PathBuf;
 
+use chrono::NaiveDateTime;
 use clap::{Parser, Subcommand};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
+use nvr::api;
 use nvr::config::Config;
 use nvr::manager::RecordingManager;
+use nvr::playback;
 use nvr::storage::chunk_pool::ChunkPool;
+use nvr::storage::index::SegmentIndex;
 
 #[derive(Parser)]
 #[command(name = "nvr", about = "Network Video Recorder", version)]
@@ -26,7 +31,6 @@ struct Cli {
 enum Command {
     /// Start recording all configured cameras.
     Record {
-        /// Path to the TOML configuration file.
         #[arg(short, long, default_value = "config.toml")]
         config: PathBuf,
     },
@@ -35,13 +39,30 @@ enum Command {
         #[arg(short, long, default_value = "config.toml")]
         config: PathBuf,
     },
-    /// List recorded segments for a camera.
+    /// List recorded segments for a camera (scanned from pool files).
     List {
         #[arg(short, long, default_value = "config.toml")]
         config: PathBuf,
         /// Camera ID to list segments for.
         #[arg(long)]
         camera: String,
+    },
+    /// Export recorded video for a camera in a time range to a .ts file.
+    Export {
+        #[arg(short, long, default_value = "config.toml")]
+        config: PathBuf,
+        /// Camera ID.
+        #[arg(long)]
+        camera: String,
+        /// Start time (local), e.g. "2026-02-19T14:00:00"
+        #[arg(long)]
+        from: String,
+        /// End time (local), e.g. "2026-02-19T15:00:00"
+        #[arg(long)]
+        to: String,
+        /// Output file path (default: export.ts)
+        #[arg(short, long, default_value = "export.ts")]
+        output: PathBuf,
     },
 }
 
@@ -65,6 +86,9 @@ async fn main() {
         Command::List { config, camera } => {
             run_list(config, &camera);
         }
+        Command::Export { config, camera, from, to, output } => {
+            run_export(config, &camera, &from, &to, &output);
+        }
     }
 }
 
@@ -86,13 +110,26 @@ async fn run_record(config_path: PathBuf) {
         "Starting NVR"
     );
 
-    let manager = match RecordingManager::new(cfg) {
+    let manager = match RecordingManager::new(cfg.clone()) {
         Ok(m) => m,
         Err(e) => {
             error!(error = %e, "Failed to start recording manager");
             std::process::exit(1);
         }
     };
+
+    // Start HTTP API if enabled.
+    if cfg.api.enabled {
+        let state = std::sync::Arc::new(api::AppState {
+            index: manager.index.clone(),
+            config: cfg.clone(),
+            read_counters: manager.read_counters.clone(),
+        });
+        let port = cfg.api.port;
+        tokio::spawn(async move {
+            api::start_server(state, port).await;
+        });
+    }
 
     // Wait for CTRL+C.
     match tokio::signal::ctrl_c().await {
@@ -120,6 +157,7 @@ fn run_status(config_path: PathBuf) {
     match ChunkPool::open(&cfg.storage.base_path, pool_bytes, cfg.storage.max_pools) {
         Ok(pool) => {
             let (idx, used, cap) = pool.status();
+            let records = pool.scan_all_pools().unwrap_or_default();
             println!("=== NVR Status ===");
             println!("Pool files  : {}", cfg.storage.max_pools);
             println!("Pool size   : {} MB each", cfg.storage.chunk_size_mb);
@@ -128,9 +166,11 @@ fn run_status(config_path: PathBuf) {
                 idx,
                 (used as f64 / cap as f64) * 100.0
             );
+            println!("Segments    : {}", records.len());
             println!("Cameras     : {}", cfg.cameras.len());
             for cam in &cfg.cameras {
-                println!("  {} ({}): {}", cam.id, cam.name, cam.url);
+                let cam_segs = records.iter().filter(|r| r.camera_id == cam.id).count();
+                println!("  {} ({}): {} — {} segments", cam.id, cam.name, cam.url, cam_segs);
             }
         }
         Err(e) => {
@@ -141,7 +181,7 @@ fn run_status(config_path: PathBuf) {
 }
 
 fn run_list(config_path: PathBuf, camera_id: &str) {
-    let _cfg = match Config::from_file(&config_path) {
+    let cfg = match Config::from_file(&config_path) {
         Ok(c) => c,
         Err(e) => {
             error!(error = %e, "Failed to load config");
@@ -149,12 +189,100 @@ fn run_list(config_path: PathBuf, camera_id: &str) {
         }
     };
 
-    // Note: without a running writer, the in-memory index is empty.
-    // In a production system, the index would be persisted to disk.
-    println!("Note: segment listing requires a running NVR instance.");
-    println!("To list segments, start with `nvr record` first.");
-    println!(
-        "Camera: {} — index not available in offline mode",
-        camera_id
-    );
+    let pool_bytes = cfg.storage.chunk_size_mb * 1024 * 1024;
+    let pool = match ChunkPool::open(&cfg.storage.base_path, pool_bytes, cfg.storage.max_pools) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Rebuild index from pools.
+    let records = pool.scan_all_pools().unwrap_or_default();
+    let mut index = SegmentIndex::new();
+    index.rebuild_from_scanned(records);
+
+    let segments = index.segments_for_camera(camera_id);
+    if segments.is_empty() {
+        println!("No segments found for camera '{}'", camera_id);
+        return;
+    }
+
+    println!("=== Segments for camera '{}' ===", camera_id);
+    println!("{:<6} {:<24} {:<24} {:<10} {:<8}", "ID", "Start", "End", "Pool", "Size");
+    println!("{}", "-".repeat(76));
+    for seg in &segments {
+        let size_kb = (seg.location.record_size - 40) / 1024; // subtract header
+        println!(
+            "{:<6} {:<24} {:<24} pool_{:03}   {} KB",
+            seg.segment_id,
+            seg.start_ts.format("%Y-%m-%d %H:%M:%S"),
+            seg.end_ts.format("%Y-%m-%d %H:%M:%S"),
+            seg.location.pool_idx,
+            size_kb,
+        );
+    }
+    println!("\nTotal: {} segments", segments.len());
+}
+
+fn run_export(config_path: PathBuf, camera_id: &str, from: &str, to: &str, output: &PathBuf) {
+    let cfg = match Config::from_file(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = %e, "Failed to load config");
+            std::process::exit(1);
+        }
+    };
+
+    // Parse timestamps.
+    let from_naive = match NaiveDateTime::parse_from_str(from, "%Y-%m-%dT%H:%M:%S") {
+        Ok(dt) => dt,
+        Err(e) => {
+            eprintln!("Invalid --from timestamp '{}': {}", from, e);
+            eprintln!("Expected format: 2026-02-19T14:00:00");
+            std::process::exit(1);
+        }
+    };
+    let to_naive = match NaiveDateTime::parse_from_str(to, "%Y-%m-%dT%H:%M:%S") {
+        Ok(dt) => dt,
+        Err(e) => {
+            eprintln!("Invalid --to timestamp '{}': {}", to, e);
+            eprintln!("Expected format: 2026-02-19T15:00:00");
+            std::process::exit(1);
+        }
+    };
+
+    let from_utc = from_naive.and_utc();
+    let to_utc = to_naive.and_utc();
+
+    // Open pool and rebuild index.
+    let pool_bytes = cfg.storage.chunk_size_mb * 1024 * 1024;
+    let pool = match ChunkPool::open(&cfg.storage.base_path, pool_bytes, cfg.storage.max_pools) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error opening pool: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let records = pool.scan_all_pools().unwrap_or_default();
+    let mut index = SegmentIndex::new();
+    index.rebuild_from_scanned(records);
+
+    // Export.
+    match playback::export_range(&pool, &index, camera_id, from_utc, to_utc, output) {
+        Ok(count) => {
+            println!(
+                "Exported {} segments for camera '{}' → {}",
+                count,
+                camera_id,
+                output.display()
+            );
+        }
+        Err(e) => {
+            eprintln!("Export failed: {e}");
+            std::process::exit(1);
+        }
+    }
 }

@@ -135,7 +135,7 @@ async fn test_global_writer_end_to_end() {
     let dir = tmp_dir();
     let pool = ChunkPool::open(dir.path(), 1024 * 1024, 3).expect("open pool");
 
-    let (tx, index, handle) = nvr::storage::global_writer::spawn_writer(pool, 64);
+    let (tx, index, _read_counters, handle) = nvr::storage::global_writer::spawn_writer(pool, 64);
 
     let now = Utc::now();
     // Send 5 write requests from different "cameras"
@@ -189,4 +189,76 @@ fn test_restart_recovery() {
         assert_eq!(index.segments_for_camera("cam0").len(), 3);
         assert_eq!(index.segments_for_camera("cam1").len(), 2);
     }
+}
+
+#[test]
+fn test_segments_in_range() {
+    let dir = tmp_dir();
+    let mut pool = ChunkPool::open(dir.path(), 1024 * 1024, 3).expect("open");
+    let mut index = SegmentIndex::new();
+
+    // Create 3 segments at different times.
+    let t0 = Utc::now();
+    let t1 = t0 + chrono::Duration::seconds(60);
+    let t2 = t1 + chrono::Duration::seconds(60);
+    let t3 = t2 + chrono::Duration::seconds(60);
+
+    let data = b"test-data";
+    let loc0 = pool.append("cam1", t0, t1, data).expect("s0");
+    index.insert("cam1", t0, t1, loc0);
+    let loc1 = pool.append("cam1", t1, t2, data).expect("s1");
+    index.insert("cam1", t1, t2, loc1);
+    let loc2 = pool.append("cam1", t2, t3, data).expect("s2");
+    index.insert("cam1", t2, t3, loc2);
+
+    // Query full range: should return all 3.
+    let all = index.segments_in_range("cam1", t0, t3);
+    assert_eq!(all.len(), 3);
+
+    // Query middle only: segments overlapping [t1, t2].
+    // seg0 ends exactly at t1 → end_ts(t1) > from(t1) is false → excluded
+    // seg1 [t1,t2] overlaps → included
+    // seg2 starts at t2 → start_ts(t2) < to(t2) is false → excluded
+    let mid = index.segments_in_range("cam1", t1, t2);
+    assert_eq!(mid.len(), 1);
+
+    // Query future: should return 0.
+    let future = t3 + chrono::Duration::seconds(100);
+    let none = index.segments_in_range("cam1", future, future + chrono::Duration::seconds(60));
+    assert_eq!(none.len(), 0);
+
+    // Query different camera: should return 0.
+    let wrong_cam = index.segments_in_range("cam99", t0, t3);
+    assert_eq!(wrong_cam.len(), 0);
+}
+
+#[test]
+fn test_export_range_end_to_end() {
+    let dir = tmp_dir();
+    let mut pool = ChunkPool::open(dir.path(), 1024 * 1024, 3).expect("open");
+    let mut index = SegmentIndex::new();
+
+    let t0 = Utc::now();
+    let t1 = t0 + chrono::Duration::seconds(60);
+    let t2 = t1 + chrono::Duration::seconds(60);
+
+    let payload1 = vec![0xAAu8; 200];
+    let payload2 = vec![0xBBu8; 300];
+
+    let loc0 = pool.append("cam1", t0, t1, &payload1).expect("s0");
+    index.insert("cam1", t0, t1, loc0);
+    let loc1 = pool.append("cam1", t1, t2, &payload2).expect("s1");
+    index.insert("cam1", t1, t2, loc1);
+
+    // Export to file.
+    let out_path = dir.path().join("export.ts");
+    let count = nvr::playback::export_range(&pool, &index, "cam1", t0, t2, &out_path)
+        .expect("export");
+    assert_eq!(count, 2);
+
+    // Verify output file contents = payload1 ++ payload2.
+    let output = std::fs::read(&out_path).expect("read output");
+    assert_eq!(output.len(), 500); // 200 + 300
+    assert_eq!(&output[..200], &payload1[..]);
+    assert_eq!(&output[200..], &payload2[..]);
 }

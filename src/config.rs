@@ -9,7 +9,30 @@ pub struct Config {
     pub storage: StorageConfig,
     /// List of cameras to record.
     pub cameras: Vec<CameraConfig>,
+    /// HTTP API configuration (optional).
+    #[serde(default)]
+    pub api: ApiConfig,
 }
+
+/// HTTP API configuration.
+#[derive(Debug, Deserialize, Clone)]
+pub struct ApiConfig {
+    /// Whether to enable the HTTP API.
+    #[serde(default = "default_api_enabled")]
+    pub enabled: bool,
+    /// Port to listen on.
+    #[serde(default = "default_api_port")]
+    pub port: u16,
+}
+
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self { enabled: default_api_enabled(), port: default_api_port() }
+    }
+}
+
+fn default_api_enabled() -> bool { true }
+fn default_api_port() -> u16 { 8080 }
 
 /// Storage parameters for the global shared pool.
 #[derive(Debug, Deserialize, Clone)]

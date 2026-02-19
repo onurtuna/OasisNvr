@@ -34,6 +34,10 @@ chrono = { version = "0.4", features = ["serde"] }
 # CLI
 clap = { version = "4", features = ["derive"] }
 
+# HTTP API
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+
 # Logging & tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

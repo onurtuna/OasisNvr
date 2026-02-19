@@ -1,6 +1,7 @@
 //! Recording manager: orchestrates global writer, all camera workers, and the
 //! shared segment index.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -10,7 +11,7 @@ use tracing::info;
 use crate::config::Config;
 use crate::error::{NvrError, Result};
 use crate::ingestion::CameraWorker;
-use crate::storage::chunk_pool::ChunkPool;
+use crate::storage::chunk_pool::{ChunkPool, PoolReadCounters};
 use crate::storage::global_writer::{self, SharedIndex, WriteRequest};
 
 /// Top-level manager.
@@ -21,6 +22,8 @@ pub struct RecordingManager {
     writer_handle: JoinHandle<()>,
     /// Shared index for status / listing.
     pub index: SharedIndex,
+    /// Shared pool reader counters for safe reads.
+    pub read_counters: Arc<PoolReadCounters>,
     /// Keep the sender alive so the writer doesn't shut down prematurely.
     _writer_tx: mpsc::Sender<WriteRequest>,
 }
@@ -39,7 +42,7 @@ impl RecordingManager {
         let pool = ChunkPool::open(base, pool_bytes, config.storage.max_pools)?;
 
         // Spawn the single global writer.
-        let (writer_tx, index, writer_handle) =
+        let (writer_tx, index, read_counters, writer_handle) =
             global_writer::spawn_writer(pool, config.storage.writer_queue_size);
 
         info!(
@@ -62,6 +65,7 @@ impl RecordingManager {
             worker_handles,
             writer_handle,
             index,
+            read_counters,
             _writer_tx: writer_tx,
         })
     }

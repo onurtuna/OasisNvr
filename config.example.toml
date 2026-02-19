@@ -24,6 +24,12 @@ segment_duration_secs = 60
 # 256 is a good default; increase for many cameras.
 writer_queue_size = 256
 
+# --- HTTP API ------------------------------------------------------------------
+
+[api]
+enabled = true
+port = 8080
+
 # --- Camera definitions -------------------------------------------------------
 
 [[cameras]]

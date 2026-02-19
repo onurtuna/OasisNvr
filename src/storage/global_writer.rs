@@ -24,7 +24,7 @@ use parking_lot::RwLock;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
-use crate::storage::chunk_pool::ChunkPool;
+use crate::storage::chunk_pool::{ChunkPool, PoolReadCounters};
 use crate::storage::index::SegmentIndex;
 
 /// Payload sent by camera workers to the global writer.
@@ -48,6 +48,7 @@ pub type SharedIndex = Arc<RwLock<SegmentIndex>>;
 /// Returns:
 ///   - `mpsc::Sender<WriteRequest>` — hand out clones to each camera worker.
 ///   - `SharedIndex` — read-only handle for status / listing.
+///   - `Arc<PoolReadCounters>` — shared pool reader counters for safe reads.
 ///   - `JoinHandle` for the writer task.
 pub fn spawn_writer(
     pool: ChunkPool,
@@ -55,17 +56,19 @@ pub fn spawn_writer(
 ) -> (
     mpsc::Sender<WriteRequest>,
     SharedIndex,
+    Arc<PoolReadCounters>,
     tokio::task::JoinHandle<()>,
 ) {
     let (tx, rx) = mpsc::channel::<WriteRequest>(channel_bound);
     let index = Arc::new(RwLock::new(SegmentIndex::new()));
     let idx_clone = index.clone();
+    let read_counters = pool.read_counters.clone();
 
     let handle = tokio::spawn(async move {
         writer_loop(pool, rx, idx_clone).await;
     });
 
-    (tx, index, handle)
+    (tx, index, read_counters, handle)
 }
 
 async fn writer_loop(

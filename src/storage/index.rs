@@ -84,6 +84,20 @@ impl SegmentIndex {
         self.entries.values().filter(move |m| m.camera_id == camera_id).collect()
     }
 
+    /// Return segments for `camera_id` that overlap the time range `[from, to]`.
+    /// A segment overlaps if `segment.start_ts < to && segment.end_ts > from`.
+    pub fn segments_in_range(
+        &self,
+        camera_id: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Vec<&SegmentMeta> {
+        self.entries
+            .values()
+            .filter(|m| m.camera_id == camera_id && m.start_ts < to && m.end_ts > from)
+            .collect()
+    }
+
     /// Return all segments across all cameras in insertion order.
     pub fn all_segments(&self) -> impl Iterator<Item = &SegmentMeta> {
         self.entries.values()

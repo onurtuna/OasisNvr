@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::error::{NvrError, Result};
 
@@ -56,7 +56,7 @@ pub struct StorageConfig {
 }
 
 /// Per-camera configuration.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CameraConfig {
     /// Unique identifier used for directory/file naming.
     pub id: String,

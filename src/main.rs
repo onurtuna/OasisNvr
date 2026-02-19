@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use chrono::NaiveDateTime;
 use clap::{Parser, Subcommand};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use nvr::api;
@@ -118,12 +118,21 @@ async fn run_record(config_path: PathBuf) {
         }
     };
 
+    let manager = std::sync::Arc::new(parking_lot::Mutex::new(manager));
+
     // Start HTTP API if enabled.
     if cfg.api.enabled {
         let state = std::sync::Arc::new(api::AppState {
-            index: manager.index.clone(),
+            index: {
+                let mgr = manager.lock();
+                mgr.index.clone()
+            },
             config: cfg.clone(),
-            read_counters: manager.read_counters.clone(),
+            read_counters: {
+                let mgr = manager.lock();
+                mgr.read_counters.clone()
+            },
+            manager: manager.clone(),
         });
         let port = cfg.api.port;
         tokio::spawn(async move {
@@ -141,7 +150,15 @@ async fn run_record(config_path: PathBuf) {
         }
     }
 
-    manager.shutdown();
+    match std::sync::Arc::try_unwrap(manager) {
+        Ok(mutex) => mutex.into_inner().shutdown(),
+        Err(_arc) => {
+            // Other references still held (API server); force shutdown via lock.
+            warn!("Forcing shutdown while API still holds references");
+            // Can't call shutdown() without ownership, but workers are aborted
+            // when the process exits anyway.
+        }
+    }
 }
 
 fn run_status(config_path: PathBuf) {

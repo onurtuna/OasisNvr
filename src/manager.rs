@@ -1,14 +1,18 @@
 //! Recording manager: orchestrates global writer, all camera workers, and the
 //! shared segment index.
+//!
+//! Supports dynamic camera add/remove at runtime via `add_camera()` and
+//! `remove_camera()`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::info;
+use tracing::{info, warn};
 
-use crate::config::Config;
+use crate::config::{CameraConfig, Config};
 use crate::error::{NvrError, Result};
 use crate::ingestion::CameraWorker;
 use crate::storage::chunk_pool::{ChunkPool, PoolReadCounters};
@@ -16,16 +20,23 @@ use crate::storage::global_writer::{self, SharedIndex, WriteRequest};
 
 /// Top-level manager.
 pub struct RecordingManager {
-    /// Per-camera worker handles.
-    worker_handles: Vec<(String, JoinHandle<()>)>,
+    /// Per-camera worker handles, keyed by camera ID.
+    workers: HashMap<String, WorkerEntry>,
     /// Global writer task handle.
     writer_handle: JoinHandle<()>,
     /// Shared index for status / listing.
     pub index: SharedIndex,
     /// Shared pool reader counters for safe reads.
     pub read_counters: Arc<PoolReadCounters>,
-    /// Keep the sender alive so the writer doesn't shut down prematurely.
-    _writer_tx: mpsc::Sender<WriteRequest>,
+    /// Channel sender — cloned to each new camera worker.
+    writer_tx: mpsc::Sender<WriteRequest>,
+    /// Segment duration used when spawning new workers.
+    segment_duration: Duration,
+}
+
+struct WorkerEntry {
+    config: CameraConfig,
+    handle: JoinHandle<()>,
 }
 
 impl RecordingManager {
@@ -53,32 +64,71 @@ impl RecordingManager {
         );
 
         // Spawn one CameraWorker per camera, all sharing writer_tx.
-        let mut worker_handles = Vec::new();
+        let mut workers = HashMap::new();
         for cam_cfg in &config.cameras {
             let worker = CameraWorker::new(cam_cfg.id.clone(), writer_tx.clone());
             let handle = worker.spawn(cam_cfg.clone(), segment_dur);
             info!(camera = cam_cfg.id, name = cam_cfg.name, "Camera registered");
-            worker_handles.push((cam_cfg.id.clone(), handle));
+            workers.insert(cam_cfg.id.clone(), WorkerEntry {
+                config: cam_cfg.clone(),
+                handle,
+            });
         }
 
         Ok(RecordingManager {
-            worker_handles,
+            workers,
             writer_handle,
             index,
             read_counters,
-            _writer_tx: writer_tx,
+            writer_tx,
+            segment_duration: segment_dur,
         })
+    }
+
+    /// Add a new camera at runtime. Returns an error if the ID already exists.
+    pub fn add_camera(&mut self, cam_cfg: CameraConfig) -> Result<()> {
+        if self.workers.contains_key(&cam_cfg.id) {
+            return Err(NvrError::Config(format!(
+                "Camera '{}' already exists", cam_cfg.id
+            )));
+        }
+
+        let worker = CameraWorker::new(cam_cfg.id.clone(), self.writer_tx.clone());
+        let handle = worker.spawn(cam_cfg.clone(), self.segment_duration);
+        info!(camera = cam_cfg.id, name = cam_cfg.name, "Camera added (hot)");
+
+        self.workers.insert(cam_cfg.id.clone(), WorkerEntry {
+            config: cam_cfg,
+            handle,
+        });
+        Ok(())
+    }
+
+    /// Remove a camera at runtime. Aborts the worker task.
+    pub fn remove_camera(&mut self, camera_id: &str) -> bool {
+        if let Some(entry) = self.workers.remove(camera_id) {
+            entry.handle.abort();
+            info!(camera = camera_id, "Camera removed (hot)");
+            true
+        } else {
+            warn!(camera = camera_id, "Camera not found for removal");
+            false
+        }
+    }
+
+    /// List currently active cameras.
+    pub fn list_cameras(&self) -> Vec<&CameraConfig> {
+        self.workers.values().map(|e| &e.config).collect()
     }
 
     /// Gracefully abort all workers and the writer. Called on shutdown.
     pub fn shutdown(self) {
         info!("NVR shutting down…");
-        for (id, handle) in self.worker_handles {
-            handle.abort();
+        for (id, entry) in self.workers {
+            entry.handle.abort();
             info!(camera = id, "Worker aborted");
         }
-        // Drop the sender so the writer loop exits.
-        drop(self._writer_tx);
+        drop(self.writer_tx);
         self.writer_handle.abort();
         info!("Global writer stopped");
     }

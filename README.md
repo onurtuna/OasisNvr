@@ -7,6 +7,7 @@ A high-performance Network Video Recorder written in Rust. Records RTSP streams 
 ## Features
 
 - **Multi-camera support** — record from unlimited RTSP cameras simultaneously
+- **Dynamic camera management** — add or remove cameras at runtime via API, no restart needed
 - **Global shared writer** — single sequential I/O stream eliminates HDD seek storms
 - **Ring buffer storage** — fixed pool files are overwritten cyclically, no manual cleanup needed
 - **Persistent index** — segment index rebuilt from pool files on restart, no data loss
@@ -24,9 +25,9 @@ cam1 ──┐                                                    ┌─ /api/st
 cam2 ──┤  mpsc channel  →  GlobalChunkWriter  →  pool_XXX   ├─ /api/list
 cam3 ──┤                         │                .bin      ├─ /api/export
 cam4 ──┘                         ▼                          ├─ /api/hls/.../live.m3u8
-                           SegmentIndex (RAM)               └─ /api/hls/.../segment/N.ts
-                                 ▲
-                      rebuilt from pool files on startup
+  ↕                        SegmentIndex (RAM)               ├─ /api/cameras (GET/POST/DELETE)
+POST/DELETE                      ▲                          └─ /api/hls/.../vod.m3u8
+/api/cameras          rebuilt from pool files on startup
 ```
 
 All cameras share a single write queue. The writer appends records sequentially into pre-allocated pool files — the HDD head only moves forward. The HTTP API reads segments directly from pool files using per-pool read guards.
@@ -70,6 +71,9 @@ While recording, the HTTP API is available at `http://localhost:8080`:
 | `GET /api/export?camera=cam1&from=...&to=...` | Download `.ts` file for a time range |
 | `GET /api/hls/{camera}/live.m3u8` | LL-HLS live playlist (low-latency) |
 | `GET /api/hls/{camera}/vod.m3u8?from=...&to=...` | VOD playlist for a time range |
+| `GET /api/cameras` | List active cameras |
+| `POST /api/cameras` | Add a camera at runtime (JSON body) |
+| `DELETE /api/cameras/{id}` | Remove a camera at runtime |
 
 ### Examples
 
@@ -88,6 +92,17 @@ vlc http://localhost:8080/api/hls/cam1/live.m3u8
 
 # Watch recorded video in VLC
 vlc "http://localhost:8080/api/hls/cam1/vod.m3u8?from=2026-02-19T14:00:00&to=2026-02-19T15:00:00"
+
+# List active cameras
+curl http://localhost:8080/api/cameras | jq
+
+# Add a camera at runtime (no restart needed)
+curl -X POST http://localhost:8080/api/cameras \
+  -H "Content-Type: application/json" \
+  -d '{"id":"cam5","name":"Garden","url":"rtsp://user:pass@192.168.1.15:554/stream1","max_reconnect_attempts":0}'
+
+# Remove a camera at runtime
+curl -X DELETE http://localhost:8080/api/cameras/cam5
 ```
 
 ## CLI Commands

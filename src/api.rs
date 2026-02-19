@@ -1,29 +1,31 @@
 //! HTTP API — runs alongside the recording process.
 //!
 //! Endpoints:
-//!   GET  /api/status                                  → system status (JSON)
-//!   GET  /api/list?camera=cam1                        → segment list (JSON)
-//!   GET  /api/export?camera=cam1&from=...&to=...      → download .ts
-//!   GET  /api/hls/{camera}/live.m3u8                  → LL-HLS live playlist
-//!   GET  /api/hls/{camera}/live.m3u8?_HLS_msn=N       → blocking reload
-//!   GET  /api/hls/{camera}/vod.m3u8?from=...&to=...   → VOD playlist
-//!   GET  /api/hls/{camera}/segment/{id}.ts            → segment data
+//!   GET    /api/status                                → system status (JSON)
+//!   GET    /api/list?camera=cam1                      → segment list (JSON)
+//!   GET    /api/export?camera=cam1&from=...&to=...    → download .ts
+//!   GET    /api/hls/{camera}/live.m3u8                → LL-HLS live playlist
+//!   GET    /api/hls/{camera}/vod.m3u8?from=...&to=... → VOD playlist
+//!   GET    /api/cameras                               → list active cameras
+//!   POST   /api/cameras                               → add camera (hot)
+//!   DELETE /api/cameras/{id}                          → remove camera (hot)
 
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{delete, get};
 use axum::Router;
 use chrono::NaiveDateTime;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use tracing::{error, info};
 
-use crate::config::Config;
+use crate::config::{CameraConfig, Config};
 use crate::hls;
+use crate::manager::RecordingManager;
 use crate::storage::chunk_pool::{ChunkPool, PoolReadCounters};
 use crate::storage::index::SegmentIndex;
 
@@ -32,6 +34,7 @@ pub struct AppState {
     pub index: Arc<RwLock<SegmentIndex>>,
     pub config: Config,
     pub read_counters: Arc<PoolReadCounters>,
+    pub manager: Arc<Mutex<RecordingManager>>,
 }
 
 // ──────────────── request / response types ────────────────────────────────
@@ -99,6 +102,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // HLS endpoints
         .route("/api/hls/{camera_id}/live.m3u8", get(handle_hls_live))
         .route("/api/hls/{camera_id}/vod.m3u8", get(handle_hls_vod))
+        // Camera management
+        .route("/api/cameras", get(handle_list_cameras).post(handle_add_camera))
+        .route("/api/cameras/{camera_id}", delete(handle_remove_camera))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -393,5 +399,68 @@ async fn handle_hls_vod(
             [("content-type", "text/plain")],
             format!("No segments found for camera '{}' in range", camera_id),
         ).into_response(),
+    }
+}
+
+// ──────────────── camera management handlers ─────────────────────────────
+
+/// List all active cameras.
+async fn handle_list_cameras(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let mgr = state.manager.lock();
+    let cameras = mgr.list_cameras();
+    let list: Vec<serde_json::Value> = cameras
+        .iter()
+        .map(|c| serde_json::json!({
+            "id": c.id,
+            "name": c.name,
+            "url": c.url,
+        }))
+        .collect();
+    drop(mgr);
+
+    (StatusCode::OK, axum::Json(serde_json::json!({
+        "cameras": list,
+        "total": list.len(),
+    })))
+}
+
+/// Add a camera at runtime.
+async fn handle_add_camera(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<CameraConfig>,
+) -> impl IntoResponse {
+    let mut mgr = state.manager.lock();
+    match mgr.add_camera(body.clone()) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            axum::Json(serde_json::json!({
+                "status": "added",
+                "camera": { "id": body.id, "name": body.name, "url": body.url }
+            })),
+        ),
+        Err(e) => (
+            StatusCode::CONFLICT,
+            axum::Json(serde_json::json!({ "error": e.to_string() })),
+        ),
+    }
+}
+
+/// Remove a camera at runtime.
+async fn handle_remove_camera(
+    State(state): State<Arc<AppState>>,
+    Path(camera_id): Path<String>,
+) -> impl IntoResponse {
+    let mut mgr = state.manager.lock();
+    if mgr.remove_camera(&camera_id) {
+        (StatusCode::OK, axum::Json(serde_json::json!({
+            "status": "removed",
+            "camera_id": camera_id,
+        })))
+    } else {
+        (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({
+            "error": format!("Camera '{}' not found", camera_id),
+        })))
     }
 }

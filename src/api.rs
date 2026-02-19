@@ -99,7 +99,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // HLS endpoints
         .route("/api/hls/{camera_id}/live.m3u8", get(handle_hls_live))
         .route("/api/hls/{camera_id}/vod.m3u8", get(handle_hls_vod))
-        .route("/api/hls/{camera_id}/segment/{segment_id}.ts", get(handle_hls_segment))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -393,64 +392,6 @@ async fn handle_hls_vod(
             StatusCode::NOT_FOUND,
             [("content-type", "text/plain")],
             format!("No segments found for camera '{}' in range", camera_id),
-        ).into_response(),
-    }
-}
-
-/// Serve a single segment's raw MPEG-TS data by segment_id.
-async fn handle_hls_segment(
-    State(state): State<Arc<AppState>>,
-    Path((camera_id, segment_id)): Path<(String, u64)>,
-) -> impl IntoResponse {
-    // Find the segment in the index.
-    let idx = state.index.read();
-    let seg = idx
-        .segments_for_camera(&camera_id)
-        .into_iter()
-        .find(|s| s.segment_id == segment_id);
-
-    let seg = match seg {
-        Some(s) => s.clone(),
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                [("content-type", "text/plain")],
-                Vec::from("Segment not found".as_bytes()),
-            ).into_response();
-        }
-    };
-    drop(idx);
-
-    // Read segment data from pool.
-    let pool_bytes = state.config.storage.chunk_size_mb * 1024 * 1024;
-    let pool = match ChunkPool::open(
-        &state.config.storage.base_path,
-        pool_bytes,
-        state.config.storage.max_pools,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                [("content-type", "text/plain")],
-                Vec::from(format!("Pool error: {e}").as_bytes()),
-            ).into_response();
-        }
-    };
-
-    // Acquire read guard before reading from pool.
-    let _guard = state.read_counters.acquire(seg.location.pool_idx);
-
-    match pool.read_segment_data(&seg.location) {
-        Ok(data) => (
-            StatusCode::OK,
-            [("content-type", "video/mp2t")],
-            data,
-        ).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [("content-type", "text/plain")],
-            Vec::from(format!("Read error: {e}").as_bytes()),
         ).into_response(),
     }
 }

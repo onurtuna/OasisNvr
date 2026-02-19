@@ -70,7 +70,6 @@ While recording, the HTTP API is available at `http://localhost:8080`:
 | `GET /api/export?camera=cam1&from=...&to=...` | Download `.ts` file for a time range |
 | `GET /api/hls/{camera}/live.m3u8` | LL-HLS live playlist (low-latency) |
 | `GET /api/hls/{camera}/vod.m3u8?from=...&to=...` | VOD playlist for a time range |
-| `GET /api/hls/{camera}/segment/{id}.ts` | Individual segment data |
 
 ### Examples
 

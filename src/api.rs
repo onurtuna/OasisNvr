@@ -93,6 +93,8 @@ struct ListResponse {
 
 // ──────────────── router ──────────────────────────────────────────────────
 
+use tower_http::services::ServeDir;
+
 /// Build the axum router.
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -108,6 +110,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // Camera management
         .route("/api/cameras", get(handle_list_cameras).post(handle_add_camera))
         .route("/api/cameras/{camera_id}", delete(handle_remove_camera))
+        // Serve static frontend files
+        .fallback_service(ServeDir::new("frontend"))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

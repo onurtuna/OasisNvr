@@ -12,6 +12,7 @@ A high-performance Network Video Recorder written in Rust. Records RTSP streams 
 - **Ring buffer storage** — fixed pool files are overwritten cyclically, no manual cleanup needed
 - **Persistent index** — segment index rebuilt from pool files on restart, no data loss
 - **HTTP API** — status, segment listing, export, and live streaming via REST endpoints
+- **Rich Web Interface** — built-in offline-capable SPA dashboard for live viewing and VOD playback natively accessible at `http://localhost:8080/`
 - **LL-HLS live playback** — watch live or recorded video in any HLS-compatible player (VLC, Safari, HLS.js)
 - **VOD playback** — export any time range as `.ts` file or stream via HLS
 - **Pool read safety** — per-pool atomic read locks prevent data corruption during concurrent read/write
@@ -31,6 +32,27 @@ POST/DELETE                      ▲                          └─ /api/hls/..
 ```
 
 All cameras share a single write queue. The writer appends records sequentially into pre-allocated pool files — the HDD head only moves forward. The HTTP API reads segments directly from pool files using per-pool read guards.
+
+## Comparison with Other NVRs
+
+While exploring NVR solutions, you might come across other excellent projects. Here is how **Oasis NVR** compares:
+
+| Feature / Aspect | Oasis NVR (This Project) | Moonfire NVR | Frigate NVR |
+|-----------------|-------------------------|--------------|-------------|
+| **Language** | Rust | Rust | TypeScript/Python |
+| **Primary Focus** | High-throughput 24/7 continuous recording | Precise time-based indexing | Smart home integration & Object detection |
+| **Recording Method** | Ring buffer → Pre-allocated pool files | H.264 stream to HDD, SQLite metadata | 10-second MP4 segments |
+| **Database** | Embedded RAM index | SQLite (on SSD) | SQLite / PostgreSQL |
+| **SSD Requirement** | Optional (Zero-overhead on cheap HDDs) | Recommended for Metadata | Recommended, not strict |
+| **HDD Seek Optimization** | ✅ One-way sequential write | Partial | ❌ None |
+| **HDD Friendly?** | ✅ Yes (Zero fragmentation, Sequential I/O) | ⚠️ Moderate (Frequent small writes) | ❌ No (Designed for SSDs) |
+| **AI / Object Detection** | ❌ None (Raw streams only) | ❌ None | ✅ Coral, GPU |
+| **Live Stream** | ✅ LL-HLS (VLC, Safari, HLS.js) | Partial | ✅ RTSP/WebRTC |
+| **VOD/Export** | ✅ .ts or HLS stream | ✅ MP4 | ✅ MP4 |
+| **Runtime Camera Management**| ✅ Add/remove via API without restart | ❌ No | ❌ No |
+| **Advantages** | Ultimate performance, 0-config storage cleanup, extremely lightweight. | Mature, precise seeking, frame-level granularity. | Powerful automation, rich smart-alerts, AI integration. |
+| **Disadvantages** | No motion detection, seeking is segment-level. | High disk I/O overhead for many cameras. | Very high CPU/RAM usage, complex setup. |
+| **License** | CC BY-NC 4.0 (Non-commercial) | Apache 2.0 | Apache 2.0 |
 
 ## Prerequisites
 
@@ -60,9 +82,14 @@ cp config.example.toml config.toml
 cargo run --release -- record --config config.toml
 ```
 
-## HTTP API
+## Built-in Web Interface
 
-While recording, the HTTP API is available at `http://localhost:8080`:
+The NVR comes with a built-in rich web dashboard accessible directly from your browser:
+* **Dashboard URL**: `http://localhost:8080/`
+* Features: System metrics, multi-camera live view, and historical segment VOD playback.
+* **Offline Ready**: The web interface does not rely on external CDNs or internet access once downloaded.
+
+While recording, the HTTP API is also available at `http://localhost:8080`:
 
 | Endpoint | Description |
 |---|---|

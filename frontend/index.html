@@ -169,25 +169,22 @@ If you use, modify, or redistribute this software, you must provide proper attri
                                 </select>
                             </div>
 
-                            <div class="control-group">
-                                <label for="rec-date-select">Select Date Range</label>
-                                <div class="date-inputs">
-                                    <div class="input-wrapper">
-                                        <span class="input-label">From:</span>
-                                        <input type="datetime-local" id="rec-date-from" class="form-input compact">
-                                    </div>
-                                    <div class="input-wrapper">
-                                        <span class="input-label">To:</span>
-                                        <input type="datetime-local" id="rec-date-to" class="form-input compact">
-                                    </div>
-                                </div>
-                                <button id="btn-fetch-segments" class="btn btn-primary mt-2">Find Recordings</button>
-                            </div>
-
                             <div class="segments-list-container">
-                                <h4>Available Segments</h4>
+                                <header class="segments-list-header">
+                                    <h4>AVAILABLE RECORDINGS</h4>
+                                    <button id="btn-fetch-segments" class="btn btn-icon" title="Refresh list">
+                                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor"
+                                            stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                                            <polyline points="23 4 23 10 17 10"></polyline>
+                                            <polyline points="1 20 1 14 7 14"></polyline>
+                                            <path
+                                                d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15">
+                                            </path>
+                                        </svg>
+                                    </button>
+                                </header>
                                 <div id="segments-list" class="segments-list">
-                                    <div class="empty-state">Select a camera to view segments</div>
+                                    <div class="empty-state">Select a camera to view recordings</div>
                                 </div>
                             </div>
                         </div>
@@ -200,22 +197,34 @@ If you use, modify, or redistribute this software, you must provide proper attri
                                 </div>
                             </div>
                             <div class="player-controls">
-                                <button id="btn-play-vod" class="btn btn-primary" disabled>
-                                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor"
-                                        stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                                    </svg>
-                                    Play Selected Range
-                                </button>
-                                <button id="btn-download-vod" class="btn btn-secondary" disabled>
-                                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor"
-                                        stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                        <polyline points="7 10 12 15 17 10"></polyline>
-                                        <line x1="12" y1="15" x2="12" y2="3"></line>
-                                    </svg>
-                                    Export .TS
-                                </button>
+                                <div class="fine-tune-controls">
+                                    <div class="input-wrapper">
+                                        <span>From:</span>
+                                        <input type="datetime-local" id="rec-date-from" class="form-input compact">
+                                    </div>
+                                    <div class="input-wrapper">
+                                        <span>To:</span>
+                                        <input type="datetime-local" id="rec-date-to" class="form-input compact">
+                                    </div>
+                                </div>
+                                <div class="button-group">
+                                    <button id="btn-play-vod" class="btn btn-primary" disabled>
+                                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor"
+                                            stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                        </svg>
+                                        Watch Selection
+                                    </button>
+                                    <button id="btn-download-vod" class="btn btn-secondary" disabled>
+                                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor"
+                                            stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                            <polyline points="7 10 12 15 17 10"></polyline>
+                                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                                        </svg>
+                                        Export .TS
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>

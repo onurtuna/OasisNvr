@@ -12,17 +12,17 @@ If you use, modify, or redistribute this software, you must provide proper attri
     --bg-surface-hover: #1c1d24;
     --bg-card: rgba(26, 28, 35, 0.7);
     --border-color: rgba(255, 255, 255, 0.08);
-    
+
     --text-primary: #ffffff;
     --text-secondary: #a0a4b8;
     --text-muted: #6b6f84;
-    
+
     --accent-primary: #5c6bc0;
     --accent-primary-hover: #7986cb;
     --accent-success: #4caf50;
     --accent-danger: #ef5350;
     --accent-warning: #ff9800;
-    
+
     --metric-blue: rgba(66, 165, 245, 0.15);
     --metric-blue-text: #64b5f6;
     --metric-purple: rgba(171, 71, 188, 0.15);
@@ -51,7 +51,8 @@ body {
     color: var(--text-primary);
     font-family: var(--font-family);
     -webkit-font-smoothing: antialiased;
-    overflow: hidden; /* App layout handles scrolling */
+    overflow: hidden;
+    /* App layout handles scrolling */
 }
 
 /* --- Layout --- */
@@ -201,8 +202,15 @@ body {
 }
 
 @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 /* --- Dashboard Grid --- */
@@ -239,10 +247,25 @@ body {
     justify-content: center;
 }
 
-.metric-icon.blue { background: var(--metric-blue); color: var(--metric-blue-text); }
-.metric-icon.purple { background: var(--metric-purple); color: var(--metric-purple-text); }
-.metric-icon.green { background: var(--metric-green); color: var(--metric-green-text); }
-.metric-icon.orange { background: var(--metric-orange); color: var(--metric-orange-text); }
+.metric-icon.blue {
+    background: var(--metric-blue);
+    color: var(--metric-blue-text);
+}
+
+.metric-icon.purple {
+    background: var(--metric-purple);
+    color: var(--metric-purple-text);
+}
+
+.metric-icon.green {
+    background: var(--metric-green);
+    color: var(--metric-green-text);
+}
+
+.metric-icon.orange {
+    background: var(--metric-orange);
+    color: var(--metric-orange-text);
+}
 
 .metric-info h3 {
     font-size: 0.85rem;
@@ -313,9 +336,17 @@ body {
 }
 
 @keyframes pulseRed {
-    0% { box-shadow: 0 0 0 0 rgba(239, 83, 80, 0.7); }
-    70% { box-shadow: 0 0 0 4px rgba(239, 83, 80, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(239, 83, 80, 0); }
+    0% {
+        box-shadow: 0 0 0 0 rgba(239, 83, 80, 0.7);
+    }
+
+    70% {
+        box-shadow: 0 0 0 4px rgba(239, 83, 80, 0);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 rgba(239, 83, 80, 0);
+    }
 }
 
 .video-container {
@@ -363,7 +394,7 @@ body {
 
 .form-input {
     width: 100%;
-    background-color: rgba(0,0,0,0.2);
+    background-color: rgba(0, 0, 0, 0.2);
     border: 1px solid var(--border-color);
     color: var(--text-primary);
     padding: 10px 14px;
@@ -441,7 +472,9 @@ body {
     background-color: rgba(255, 255, 255, 0.15);
 }
 
-.mt-2 { margin-top: 16px; }
+.mt-2 {
+    margin-top: 16px;
+}
 
 .segments-list-container {
     flex: 1;
@@ -527,8 +560,11 @@ body {
 
 .player-overlay {
     position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.8);
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.8);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -544,15 +580,66 @@ body {
 }
 
 .player-controls {
-    padding: 20px;
+    padding: 24px;
     background: var(--bg-surface);
     border-top: 1px solid var(--border-color);
     display: flex;
-    gap: 16px;
-    justify-content: center;
+    flex-direction: column;
+    gap: 20px;
 }
 
-.player-controls .btn {
+.fine-tune-controls {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    padding-bottom: 4px;
+}
+
+.fine-tune-controls .input-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.fine-tune-controls span {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.button-group {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+}
+
+.button-group .btn {
     width: auto;
-    min-width: 200px;
+    min-width: 180px;
+}
+
+.segments-list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px 8px;
+}
+
+.segments-list-header h4 {
+    padding: 0 !important;
+}
+
+.btn-icon {
+    background: transparent;
+    color: var(--text-muted);
+    padding: 6px;
+    width: auto;
+    border-radius: 6px;
+}
+
+.btn-icon:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
 }

@@ -122,12 +122,25 @@ pub fn generate_vod_playlist(
         }
     }
 
+    // Calculate start offset if the requested "from" is after the start of the first segment.
+    let start_offset = if let Some(first) = segments.first() {
+        let diff = (from - first.start_ts).num_milliseconds() as f64 / 1000.0;
+        if diff > 0.0 { diff } else { 0.0 }
+    } else {
+        0.0
+    };
+
     let mut m3u8 = String::with_capacity(2048);
     writeln!(m3u8, "#EXTM3U").unwrap();
     writeln!(m3u8, "#EXT-X-VERSION:3").unwrap();
     writeln!(m3u8, "#EXT-X-TARGETDURATION:{}", max_duration.ceil() as u64).unwrap();
     writeln!(m3u8, "#EXT-X-MEDIA-SEQUENCE:{}", first_seq).unwrap();
     writeln!(m3u8, "#EXT-X-PLAYLIST-TYPE:VOD").unwrap();
+
+    if start_offset > 0.1 {
+        writeln!(m3u8, "#EXT-X-START:TIME-OFFSET={:.3}", start_offset).unwrap();
+    }
+
     writeln!(m3u8, "#EXT-X-DISCONTINUITY").unwrap();
 
     let mut prev_end_ts = None;

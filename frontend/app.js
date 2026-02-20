@@ -195,7 +195,7 @@ els.recCamSelect.addEventListener('change', async () => {
     if (!camId) return;
 
     try {
-        els.segsList.innerHTML = '<div class="empty-state">Loading recordings...</div>';
+        els.segsList.innerHTML = '<div class="empty-state">Looking for recordings...</div>';
         els.btnPlayVod.disabled = true;
         els.btnDownloadVod.disabled = true;
 
@@ -205,18 +205,22 @@ els.recCamSelect.addEventListener('change', async () => {
 
         currentSegments = data.segments || [];
 
-        // Auto-update From/To bounds based on the earliest and latest segments
         if (currentSegments.length > 0) {
-            currentSegments.sort((a, b) => new Date(a.start + 'Z') - new Date(b.start + 'Z'));
-            const firstDate = new Date(currentSegments[0].start + 'Z');
-            const lastDate = new Date(currentSegments[currentSegments.length - 1].end + 'Z');
+            // Sort segments newest first for the listing
+            currentSegments.sort((a, b) => new Date(b.start + 'Z') - new Date(a.start + 'Z'));
+
+            // Set default range to the absolute latest available footage
+            const lastDate = new Date(currentSegments[0].end + 'Z');
+            const oneHourAgo = new Date(lastDate.getTime() - (60 * 60 * 1000));
+            const absoluteFirst = new Date(currentSegments[currentSegments.length - 1].start + 'Z');
+            const startDate = oneHourAgo > absoluteFirst ? oneHourAgo : absoluteFirst;
 
             const toLocalISO = dt => {
                 const pad = num => num.toString().padStart(2, '0');
                 return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
             };
 
-            els.recDateFrom.value = toLocalISO(firstDate);
+            els.recDateFrom.value = toLocalISO(startDate);
             els.recDateTo.value = toLocalISO(lastDate);
         }
 
@@ -227,12 +231,10 @@ els.recCamSelect.addEventListener('change', async () => {
     }
 });
 
-// Refresh button just triggers the camera select's change event
-els.btnFetchSegs.addEventListener('click', () => {
-    if (!els.recCamSelect.value) {
-        alert("Please select a camera first");
-        return;
-    }
+// Refresh button
+els.btnFetchSegs.addEventListener('click', (e) => {
+    const camId = els.recCamSelect.value;
+    if (!camId) return;
     els.recCamSelect.dispatchEvent(new Event('change'));
 });
 

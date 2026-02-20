@@ -35,8 +35,6 @@ All cameras share a single write queue. The writer appends records sequentially 
 
 ## Comparison with Other NVRs
 
-While exploring NVR solutions, you might come across other excellent projects. Here is how **Oasis NVR** compares:
-
 | Feature / Aspect | Oasis NVR (This Project) | Moonfire NVR | Frigate NVR |
 |-----------------|-------------------------|--------------|-------------|
 | **Language** | Rust | Rust | TypeScript/Python |

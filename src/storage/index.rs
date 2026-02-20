@@ -1,3 +1,8 @@
+// This software is provided for non-commercial use only.
+// Commercial use is strictly prohibited.
+// If you use, modify, or redistribute this software, you must provide proper attribution to the original author.
+// (c) 2026 Onur Tuna. All rights reserved.
+
 //! Segment index — maps (camera_id, time_range) → SegmentLocation.
 //!
 //! The index lives in memory during a recording session but is **persistent**:

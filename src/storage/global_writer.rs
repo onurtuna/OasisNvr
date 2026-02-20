@@ -1,3 +1,8 @@
+// This software is provided for non-commercial use only.
+// Commercial use is strictly prohibited.
+// If you use, modify, or redistribute this software, you must provide proper attribution to the original author.
+// (c) 2026 Onur Tuna. All rights reserved.
+
 //! Global chunk writer — single async task that serialises all camera segment
 //! writes into one sequential I/O stream.
 //!

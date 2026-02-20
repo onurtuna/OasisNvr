@@ -43,7 +43,7 @@ impl CameraStream {
         let pipeline_str = format!(
             "rtspsrc location={url} latency=200 protocols=tcp ! \
              rtph264depay ! h264parse config-interval=-1 ! mpegtsmux ! \
-             appsink name=sink emit-signals=true max-buffers=32 drop=true sync=false",
+             appsink name=sink emit-signals=true max-buffers=32 drop=true sync=true",
             url = config.url
         );
 

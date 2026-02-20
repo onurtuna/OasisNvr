@@ -512,7 +512,10 @@ const video = document.getElementById("v");
 const status = document.getElementById("status");
 
 if (Hls.isSupported()) {{
-  const hls = new Hls({{ enableWorker: true }});
+  const hls = new Hls({{ 
+    enableWorker: true,
+    startFragPrefetch: true
+  }});
   hls.loadSource(src);
   hls.attachMedia(video);
   hls.on(Hls.Events.MANIFEST_PARSED, () => {{

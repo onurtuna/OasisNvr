@@ -64,8 +64,23 @@ pub fn generate_live_playlist(
     )
     .unwrap();
 
+    let mut prev_end_ts = None;
+
     for seg in window {
+        if let Some(prev_end) = prev_end_ts {
+            let gap: chrono::TimeDelta = seg.start_ts - prev_end;
+            if gap.num_milliseconds() > 1500 {
+                writeln!(m3u8, "#EXT-X-DISCONTINUITY").unwrap();
+            }
+        }
+        prev_end_ts = Some(seg.end_ts);
+
         let duration = segment_actual_duration(seg, segment_duration_secs);
+        writeln!(
+            m3u8,
+            "#EXT-X-PROGRAM-DATE-TIME:{}",
+            seg.start_ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        ).unwrap();
         writeln!(m3u8, "#EXTINF:{:.3},", duration).unwrap();
         writeln!(
             m3u8,
@@ -94,15 +109,39 @@ pub fn generate_vod_playlist(
 
     let first_seq = segments.first().map(|s| s.segment_id).unwrap_or(0);
 
+    let mut max_duration = 0.0f64;
+    for seg in &segments {
+        let duration = segment_actual_duration(seg, segment_duration_secs);
+        if duration > max_duration {
+            max_duration = duration;
+        }
+    }
+
     let mut m3u8 = String::with_capacity(2048);
     writeln!(m3u8, "#EXTM3U").unwrap();
     writeln!(m3u8, "#EXT-X-VERSION:3").unwrap();
-    writeln!(m3u8, "#EXT-X-TARGETDURATION:{}", segment_duration_secs).unwrap();
+    writeln!(m3u8, "#EXT-X-TARGETDURATION:{}", max_duration.ceil() as u64).unwrap();
     writeln!(m3u8, "#EXT-X-MEDIA-SEQUENCE:{}", first_seq).unwrap();
     writeln!(m3u8, "#EXT-X-PLAYLIST-TYPE:VOD").unwrap();
+    writeln!(m3u8, "#EXT-X-DISCONTINUITY").unwrap();
+
+    let mut prev_end_ts = None;
 
     for seg in &segments {
+        if let Some(prev_end) = prev_end_ts {
+            let gap: chrono::TimeDelta = seg.start_ts - prev_end;
+            if gap.num_milliseconds() > 1500 {
+                writeln!(m3u8, "#EXT-X-DISCONTINUITY").unwrap();
+            }
+        }
+        prev_end_ts = Some(seg.end_ts);
+
         let duration = segment_actual_duration(seg, segment_duration_secs);
+        writeln!(
+            m3u8,
+            "#EXT-X-PROGRAM-DATE-TIME:{}",
+            seg.start_ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        ).unwrap();
         writeln!(m3u8, "#EXTINF:{:.3},", duration).unwrap();
         writeln!(
             m3u8,

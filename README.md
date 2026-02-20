@@ -49,7 +49,7 @@ All cameras share a single write queue. The writer appends records sequentially 
 | **VOD/Export** | ✅ .ts or HLS stream | ✅ MP4 | ✅ MP4 |
 | **Runtime Camera Management**| ✅ Add/remove via API without restart | ❌ No | ❌ No |
 | **Advantages** | Ultimate performance, 0-config storage cleanup, extremely lightweight. | Mature, precise seeking, frame-level granularity. | Powerful automation, rich smart-alerts, AI integration. |
-| **Disadvantages** | No motion detection, seeking is segment-level. | High disk I/O overhead for many cameras. | Very high CPU/RAM usage, complex setup. |
+| **Disadvantages** | No AI integration. | High disk I/O overhead for many cameras. | Very high CPU/RAM usage, complex setup. |
 | **License** | CC BY-NC 4.0 (Non-commercial) | Apache 2.0 | Apache 2.0 |
 
 ## Prerequisites

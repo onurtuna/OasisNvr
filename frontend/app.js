@@ -83,7 +83,7 @@ async function init() {
     // Helper to format Date to YYYY-MM-DDTHH:MM in local time
     const toLocalISO = dt => {
         const pad = num => num.toString().padStart(2, '0');
-        return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+        return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
     };
 
     // Default Dates for VOD (last 2 hours)
@@ -217,7 +217,7 @@ els.recCamSelect.addEventListener('change', async () => {
 
             const toLocalISO = dt => {
                 const pad = num => num.toString().padStart(2, '0');
-                return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+                return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
             };
 
             els.recDateFrom.value = toLocalISO(startDate);
@@ -312,7 +312,8 @@ function displaySegmentsList(segments) {
         el.addEventListener('click', () => {
             const pad = num => num.toString().padStart(2, '0');
             const toLocalISO = dt => {
-                return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+                const pad = num => num.toString().padStart(2, '0');
+                return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
             };
 
             els.recDateFrom.value = toLocalISO(block.start);

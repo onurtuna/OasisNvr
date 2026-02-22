@@ -69,6 +69,16 @@ If you use, modify, or redistribute this software, you must provide proper attri
                     </svg>
                     Recordings
                 </a>
+                <a href="#" class="nav-item" data-target="configuration-view">
+                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path
+                            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+                        </path>
+                    </svg>
+                    Configuration
+                </a>
             </nav>
             <div class="sidebar-footer">
                 <div class="status-indicator">
@@ -227,6 +237,41 @@ If you use, modify, or redistribute this software, you must provide proper attri
                                         Export .TS
                                     </button>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Configuration View -->
+                <section id="configuration-view" class="view">
+                    <div class="config-layout" style="display:flex; gap: 24px; flex-wrap: wrap;">
+                        <div class="config-panel"
+                            style="flex:1; min-width:300px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 24px;">
+                            <h3 style="margin-bottom: 20px;">Add New Camera</h3>
+                            <form id="add-camera-form">
+                                <div class="control-group" style="padding:0; border:none; margin-bottom:16px;">
+                                    <label for="new-cam-id">Camera ID</label>
+                                    <input type="text" id="new-cam-id" class="form-input" placeholder="e.g. cam1"
+                                        required>
+                                </div>
+                                <div class="control-group" style="padding:0; border:none; margin-bottom:16px;">
+                                    <label for="new-cam-name">Display Name</label>
+                                    <input type="text" id="new-cam-name" class="form-input"
+                                        placeholder="e.g. Front Door" required>
+                                </div>
+                                <div class="control-group" style="padding:0; border:none; margin-bottom:16px;">
+                                    <label for="new-cam-url">RTSP Stream URL</label>
+                                    <input type="text" id="new-cam-url" class="form-input"
+                                        placeholder="rtsp://user:pass@ip:port/stream" required>
+                                </div>
+                                <button type="submit" class="btn btn-primary mt-2">Add Camera</button>
+                            </form>
+                        </div>
+                        <div class="config-panel"
+                            style="flex:1; min-width:300px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 24px;">
+                            <h3 style="margin-bottom: 20px;">Configured Cameras</h3>
+                            <div id="config-cameras-list" class="segments-list" style="padding:0;">
+                                <div class="empty-state">Loading cameras...</div>
                             </div>
                         </div>
                     </div>

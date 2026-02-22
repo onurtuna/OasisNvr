@@ -39,6 +39,13 @@ const els = {
     vodOverlay: document.getElementById('vod-overlay'),
     btnPlayVod: document.getElementById('btn-play-vod'),
     btnDownloadVod: document.getElementById('btn-download-vod'),
+
+    // Configuration View
+    configCamList: document.getElementById('config-cameras-list'),
+    addCamForm: document.getElementById('add-camera-form'),
+    newCamId: document.getElementById('new-cam-id'),
+    newCamName: document.getElementById('new-cam-name'),
+    newCamUrl: document.getElementById('new-cam-url'),
 };
 
 // Setup Clock
@@ -71,6 +78,8 @@ els.navItems.forEach(item => {
             refreshLiveCameras();
         } else if (targetId === 'dashboard-view') {
             fetchStatus();
+        } else if (targetId === 'configuration-view') {
+            renderConfigCameras();
         }
     });
 });
@@ -123,11 +132,11 @@ async function fetchCameras() {
         const data = await res.json();
         state.cams = data.cameras || [];
 
-        // Populate Selects
+        // Populate Selects with all (active and historical) cameras
         els.recCamSelect.innerHTML = '<option value="" disabled selected>Select a camera</option>' +
             state.cams.map(c => `<option value="${c.id}">${c.name || c.id}</option>`).join('');
 
-        // Setup Live View Grid
+        // Setup Live Grid only with active cameras
         setupLiveGrid();
     } catch (err) {
         console.error("Error fetching cameras:", err);
@@ -138,12 +147,14 @@ async function fetchCameras() {
 function setupLiveGrid() {
     els.liveContainer.innerHTML = '';
 
-    if (state.cams.length === 0) {
-        els.liveContainer.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;">No cameras configured</div>';
+    const activeCams = state.cams.filter(c => c.status === 'active');
+
+    if (activeCams.length === 0) {
+        els.liveContainer.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;">No active cameras configured</div>';
         return;
     }
 
-    state.cams.forEach(cam => {
+    activeCams.forEach(cam => {
         const card = document.createElement('div');
         card.className = 'camera-card';
         card.innerHTML = `
@@ -165,7 +176,9 @@ function refreshLiveCameras() {
     Object.values(state.hlsPlayers).forEach(p => p.destroy());
     state.hlsPlayers = {};
 
-    state.cams.forEach(cam => {
+    const activeCams = state.cams.filter(c => c.status === 'active');
+
+    activeCams.forEach(cam => {
         const video = document.getElementById(`live-video-${cam.id}`);
         if (!video) return;
 
@@ -391,3 +404,110 @@ els.btnDownloadVod.addEventListener('click', () => {
 
 // Boot
 init();
+
+// --- Configuration View Logic ---
+function renderConfigCameras() {
+    if (!els.configCamList) return;
+    els.configCamList.innerHTML = '';
+
+    const activeCams = state.cams.filter(c => c.status === 'active');
+
+    if (activeCams.length === 0) {
+        els.configCamList.innerHTML = '<div class="empty-state">No cameras configured</div>';
+        return;
+    }
+
+    activeCams.forEach(cam => {
+        const item = document.createElement('div');
+        item.className = 'segment-item';
+        item.style.display = 'block';
+        item.style.padding = '16px';
+        item.style.cursor = 'default';
+        item.innerHTML = `
+            <div style="margin-bottom: 12px;">
+                <div style="font-weight:600; font-size:1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px;">
+                    ${cam.name || cam.id} <span style="color:var(--text-muted); font-size:0.85rem; font-weight:normal;">(ID: ${cam.id})</span>
+                </div>
+                <div style="font-size:0.85rem; color:var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    <strong>Adres:</strong> ${cam.url}
+                </div>
+            </div>
+            <button class="btn btn-secondary btn-remove-cam" data-id="${cam.id}" data-name="${cam.name || cam.id}" style="width:100%; padding:8px 12px; background:rgba(239,83,80,0.15); color:var(--accent-danger); border: 1px solid rgba(239,83,80,0.3); justify-content:center;">
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                Kamerayı Sil
+            </button>
+        `;
+        els.configCamList.appendChild(item);
+    });
+
+    // Attach remove listeners
+    document.querySelectorAll('.btn-remove-cam').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            const camId = e.currentTarget.getAttribute('data-id');
+            const camName = e.currentTarget.getAttribute('data-name');
+            if (!confirm(`'${camName}' kamerasını silmek istediğinize emin misiniz?`)) return;
+
+            try {
+                const res = await fetch(`/api/cameras/${encodeURIComponent(camId)}`, { method: 'DELETE' });
+                if (!res.ok) {
+                    const data = await res.json();
+                    throw new Error(data.error || 'Failed to remove camera');
+                }
+                // Refresh state
+                await fetchCameras();
+                fetchStatus();
+                renderConfigCameras();
+            } catch (err) {
+                console.error(err);
+                alert("Failed to remove camera: " + err.message);
+            }
+        });
+    });
+}
+
+if (els.addCamForm) {
+    els.addCamForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const payload = {
+            id: els.newCamId.value.trim(),
+            name: els.newCamName.value.trim(),
+            url: els.newCamUrl.value.trim(),
+        };
+
+        try {
+            const btn = els.addCamForm.querySelector('button[type="submit"]');
+            const origText = btn.textContent;
+            btn.textContent = 'Adding...';
+            btn.disabled = true;
+
+            const res = await fetch('/api/cameras', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            btn.textContent = origText;
+            btn.disabled = false;
+
+            if (!res.ok) {
+                const data = await res.json();
+                throw new Error(data.error || 'Failed to add camera');
+            }
+
+            // Success
+            els.addCamForm.reset();
+            await fetchCameras();
+            fetchStatus();
+            renderConfigCameras();
+        } catch (err) {
+            console.error(err);
+            alert("Error adding camera: " + err.message);
+
+            const btn = els.addCamForm.querySelector('button[type="submit"]');
+            btn.textContent = 'Add Camera';
+            btn.disabled = false;
+        }
+    });
+}
+

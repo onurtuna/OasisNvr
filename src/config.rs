@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use crate::error::{NvrError, Result};
 
 /// Top-level configuration loaded from a TOML file.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     /// Storage configuration.
     pub storage: StorageConfig,
@@ -20,7 +20,7 @@ pub struct Config {
 }
 
 /// HTTP API configuration.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ApiConfig {
     /// Whether to enable the HTTP API.
     #[serde(default = "default_api_enabled")]
@@ -40,7 +40,7 @@ fn default_api_enabled() -> bool { true }
 fn default_api_port() -> u16 { 8080 }
 
 /// Storage parameters for the global shared pool.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct StorageConfig {
     /// Base directory where pool files are stored.
     pub base_path: PathBuf,
@@ -103,6 +103,15 @@ impl Config {
         if self.storage.segment_duration_secs == 0 {
             return Err(NvrError::Config("segment_duration_secs must be > 0".into()));
         }
+        Ok(())
+    }
+
+    /// Save configuration back to a TOML file at `path`.
+    pub fn save_to_file(&self, path: &std::path::Path) -> Result<()> {
+        let content = toml::to_string(self)
+            .map_err(|e| NvrError::Config(format!("Failed to serialize config to TOML: {e}")))?;
+        std::fs::write(path, content)
+            .map_err(|e| NvrError::Config(format!("Failed to write config file: {e}")))?;
         Ok(())
     }
 }

@@ -37,7 +37,8 @@ use crate::storage::index::SegmentIndex;
 /// Shared state passed to all handlers.
 pub struct AppState {
     pub index: Arc<RwLock<SegmentIndex>>,
-    pub config: Config,
+    pub config: std::sync::Arc<std::sync::RwLock<Config>>,
+    pub config_path: std::path::PathBuf,
     pub read_counters: Arc<PoolReadCounters>,
     pub manager: Arc<Mutex<RecordingManager>>,
 }
@@ -145,11 +146,18 @@ pub async fn start_server(state: Arc<AppState>, port: u16) {
 async fn handle_status(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let pool_bytes = state.config.storage.chunk_size_mb * 1024 * 1024;
+    let pool_bytes = {
+        let cfg = state.config.read().unwrap();
+        cfg.storage.chunk_size_mb * 1024 * 1024
+    };
+    
+    let base_path = state.config.read().unwrap().storage.base_path.clone();
+    let max_pools = state.config.read().unwrap().storage.max_pools;
+    
     let pool = match ChunkPool::open(
-        &state.config.storage.base_path,
+        &base_path,
         pool_bytes,
-        state.config.storage.max_pools,
+        max_pools,
     ) {
         Ok(p) => p,
         Err(e) => {
@@ -163,20 +171,22 @@ async fn handle_status(
     let (idx, used, cap) = pool.status();
     let index = state.index.read();
 
-    let cameras: Vec<CameraStatus> = state
-        .config
-        .cameras
-        .iter()
-        .map(|c| CameraStatus {
-            id: c.id.clone(),
-            name: c.name.clone(),
-            segments: index.segments_for_camera(&c.id).len(),
-        })
-        .collect();
+    let cameras: Vec<CameraStatus> = {
+        let cfg = state.config.read().unwrap();
+        cfg.cameras
+            .iter()
+            .map(|c| CameraStatus {
+                id: c.id.clone(),
+                name: c.name.clone(),
+                segments: index.segments_for_camera(&c.id).len(),
+            })
+            .collect()
+    };
 
+    let cfg = state.config.read().unwrap();
     let resp = StatusResponse {
-        pool_files: state.config.storage.max_pools,
-        pool_size_mb: state.config.storage.chunk_size_mb,
+        pool_files: cfg.storage.max_pools,
+        pool_size_mb: cfg.storage.chunk_size_mb,
         active_pool_idx: idx,
         active_pool_pct: if cap > 0 {
             (used as f64 / cap as f64) * 100.0
@@ -247,11 +257,17 @@ async fn handle_export(
     let to_utc = to_naive.and_utc();
 
     // Open pool for reading.
-    let pool_bytes = state.config.storage.chunk_size_mb * 1024 * 1024;
+    let pool_bytes = {
+        let cfg = state.config.read().unwrap();
+        cfg.storage.chunk_size_mb * 1024 * 1024
+    };
+    let base_path = state.config.read().unwrap().storage.base_path.clone();
+    let max_pools = state.config.read().unwrap().storage.max_pools;
+    
     let pool = match ChunkPool::open(
-        &state.config.storage.base_path,
+        &base_path,
         pool_bytes,
-        state.config.storage.max_pools,
+        max_pools,
     ) {
         Ok(p) => p,
         Err(e) => {
@@ -323,7 +339,7 @@ async fn handle_hls_live(
     axum::extract::Path(camera_id): axum::extract::Path<String>,
     raw_query: axum::extract::RawQuery,
 ) -> axum::response::Response {
-    let seg_dur = state.config.storage.segment_duration_secs;
+    let seg_dur = state.config.read().unwrap().storage.segment_duration_secs;
 
     // Parse _HLS_msn from raw query string.
     let block_msn: Option<u64> = raw_query.0.as_deref().and_then(|q| {
@@ -392,7 +408,7 @@ async fn handle_hls_vod(
         }
     };
 
-    let seg_dur = state.config.storage.segment_duration_secs;
+    let seg_dur = state.config.read().unwrap().storage.segment_duration_secs;
     let idx = state.index.read();
     match hls::generate_vod_playlist(
         &idx,
@@ -580,11 +596,17 @@ async fn handle_hls_segment(
     };
 
     // Read segment data from pool.
-    let pool_bytes = state.config.storage.chunk_size_mb * 1024 * 1024;
+    let pool_bytes = {
+        let cfg = state.config.read().unwrap();
+        cfg.storage.chunk_size_mb * 1024 * 1024
+    };
+    let base_path = state.config.read().unwrap().storage.base_path.clone();
+    let max_pools = state.config.read().unwrap().storage.max_pools;
+
     let pool = match ChunkPool::open(
-        &state.config.storage.base_path,
+        &base_path,
         pool_bytes,
-        state.config.storage.max_pools,
+        max_pools,
     ) {
         Ok(p) => p,
         Err(e) => {
@@ -615,21 +637,44 @@ async fn handle_hls_segment(
 
 // ──────────────── camera management handlers ─────────────────────────────
 
-/// List all active cameras.
+/// List all active and historical cameras.
 async fn handle_list_cameras(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let mgr = state.manager.lock();
-    let cameras = mgr.list_cameras();
-    let list: Vec<serde_json::Value> = cameras
+    let active_cameras = mgr.list_cameras();
+    
+    // Hash map to check currently active ones
+    use std::collections::HashSet;
+    let mut active_ids = HashSet::new();
+    
+    let mut list: Vec<serde_json::Value> = active_cameras
         .iter()
-        .map(|c| serde_json::json!({
-            "id": c.id,
-            "name": c.name,
-            "url": c.url,
-        }))
+        .map(|c| {
+            active_ids.insert(c.id.clone());
+            serde_json::json!({
+                "id": c.id,
+                "name": c.name,
+                "url": c.url,
+                "status": "active"
+            })
+        })
         .collect();
     drop(mgr);
+
+    // Merge historically recorded cameras from SegmentIndex
+    let index = state.index.read();
+    let historical_cameras = index.cameras(); // returns Vec<String>
+    for cam_id in historical_cameras {
+        if !active_ids.contains(&cam_id) {
+            list.push(serde_json::json!({
+                "id": cam_id,
+                "name": format!("Removed: {}", cam_id),
+                "url": "",
+                "status": "offline"
+            }));
+        }
+    }
 
     (StatusCode::OK, axum::Json(serde_json::json!({
         "cameras": list,
@@ -644,13 +689,22 @@ async fn handle_add_camera(
 ) -> impl IntoResponse {
     let mut mgr = state.manager.lock();
     match mgr.add_camera(body.clone()) {
-        Ok(()) => (
-            StatusCode::CREATED,
-            axum::Json(serde_json::json!({
-                "status": "added",
-                "camera": { "id": body.id, "name": body.name, "url": body.url }
-            })),
-        ),
+        Ok(()) => {
+            // Update Config in memory and save to file
+            let mut cfg = state.config.write().unwrap();
+            cfg.cameras.push(body.clone());
+            if let Err(e) = cfg.save_to_file(&state.config_path) {
+                error!("Failed to save config to toml: {}", e);
+            }
+
+            (
+                StatusCode::CREATED,
+                axum::Json(serde_json::json!({
+                    "status": "added",
+                    "camera": { "id": body.id, "name": body.name, "url": body.url }
+                })),
+            )
+        },
         Err(e) => (
             StatusCode::CONFLICT,
             axum::Json(serde_json::json!({ "error": e.to_string() })),
@@ -665,6 +719,13 @@ async fn handle_remove_camera(
 ) -> impl IntoResponse {
     let mut mgr = state.manager.lock();
     if mgr.remove_camera(&camera_id) {
+        // Update Config in memory and save to file
+        let mut cfg = state.config.write().unwrap();
+        cfg.cameras.retain(|c| c.id != camera_id);
+        if let Err(e) = cfg.save_to_file(&state.config_path) {
+            error!("Failed to save config to toml: {}", e);
+        }
+
         (StatusCode::OK, axum::Json(serde_json::json!({
             "status": "removed",
             "camera_id": camera_id,

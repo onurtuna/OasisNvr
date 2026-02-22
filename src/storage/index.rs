@@ -117,6 +117,14 @@ impl SegmentIndex {
         self.entries.is_empty()
     }
 
+    /// Return a list of all unique camera IDs in the index.
+    pub fn cameras(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.entries.values().map(|m| m.camera_id.clone()).collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
     /// Rebuild the index from records recovered by scanning pool files.
     /// Called once on startup; zero disk I/O of its own.
     pub fn rebuild_from_scanned(&mut self, records: Vec<crate::storage::chunk_pool::ScannedRecord>) {

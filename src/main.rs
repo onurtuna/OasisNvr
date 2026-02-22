@@ -132,7 +132,8 @@ async fn run_record(config_path: PathBuf) {
                 let mgr = manager.lock();
                 mgr.index.clone()
             },
-            config: cfg.clone(),
+            config: std::sync::Arc::new(std::sync::RwLock::new(cfg.clone())),
+            config_path: config_path.clone(),
             read_counters: {
                 let mgr = manager.lock();
                 mgr.read_counters.clone()

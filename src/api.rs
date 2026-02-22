@@ -146,29 +146,15 @@ pub async fn start_server(state: Arc<AppState>, port: u16) {
 async fn handle_status(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let pool_bytes = {
-        let cfg = state.config.read().unwrap();
-        cfg.storage.chunk_size_mb * 1024 * 1024
+    let pool_guard = {
+        let mgr = state.manager.lock();
+        mgr.pool.clone()
     };
     
-    let base_path = state.config.read().unwrap().storage.base_path.clone();
-    let max_pools = state.config.read().unwrap().storage.max_pools;
-    
-    let pool = match ChunkPool::open(
-        &base_path,
-        pool_bytes,
-        max_pools,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(serde_json::json!({"error": e.to_string()})),
-            );
-        }
+    let (idx, used, cap) = {
+        let p = pool_guard.read();
+        p.status()
     };
-
-    let (idx, used, cap) = pool.status();
     let index = state.index.read();
 
     let cameras: Vec<CameraStatus> = {
@@ -596,32 +582,17 @@ async fn handle_hls_segment(
     };
 
     // Read segment data from pool.
-    let pool_bytes = {
-        let cfg = state.config.read().unwrap();
-        cfg.storage.chunk_size_mb * 1024 * 1024
+    let pool_guard = {
+        let mgr = state.manager.lock();
+        mgr.pool.clone()
     };
-    let base_path = state.config.read().unwrap().storage.base_path.clone();
-    let max_pools = state.config.read().unwrap().storage.max_pools;
 
-    let pool = match ChunkPool::open(
-        &base_path,
-        pool_bytes,
-        max_pools,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                [("content-type", "text/plain")],
-                Vec::from(format!("Pool error: {e}").as_bytes()),
-            ).into_response();
-        }
-    };
+    let p = pool_guard.read();
 
     // Acquire read guard to prevent pool rotation during read.
     let _guard = state.read_counters.acquire(seg.location.pool_idx);
 
-    match pool.read_segment_data(&seg.location) {
+    match p.read_segment_data(&seg.location) {
         Ok(data) => (
             StatusCode::OK,
             [("content-type", "video/mp2t")],

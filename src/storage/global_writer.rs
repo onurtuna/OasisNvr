@@ -29,7 +29,7 @@ use parking_lot::RwLock;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
-use crate::storage::chunk_pool::{ChunkPool, PoolReadCounters};
+use crate::storage::chunk_pool::ChunkPool;
 use crate::storage::index::SegmentIndex;
 
 /// Payload sent by camera workers to the global writer.
@@ -56,33 +56,36 @@ pub type SharedIndex = Arc<RwLock<SegmentIndex>>;
 ///   - `Arc<PoolReadCounters>` — shared pool reader counters for safe reads.
 ///   - `JoinHandle` for the writer task.
 pub fn spawn_writer(
-    pool: ChunkPool,
+    pool: Arc<RwLock<ChunkPool>>,
     channel_bound: usize,
 ) -> (
     mpsc::Sender<WriteRequest>,
     SharedIndex,
-    Arc<PoolReadCounters>,
     tokio::task::JoinHandle<()>,
 ) {
     let (tx, rx) = mpsc::channel::<WriteRequest>(channel_bound);
     let index = Arc::new(RwLock::new(SegmentIndex::new()));
     let idx_clone = index.clone();
-    let read_counters = pool.read_counters.clone();
 
     let handle = tokio::spawn(async move {
         writer_loop(pool, rx, idx_clone).await;
     });
 
-    (tx, index, read_counters, handle)
+    (tx, index, handle)
 }
 
 async fn writer_loop(
-    mut pool: ChunkPool,
+    pool: Arc<RwLock<ChunkPool>>,
     mut rx: mpsc::Receiver<WriteRequest>,
     index: SharedIndex,
 ) {
     // Rebuild index from existing pool data (sequential scan, one-time).
-    match pool.scan_all_pools() {
+    let records_res = {
+        let p = pool.read();
+        p.scan_all_pools()
+    };
+    
+    match records_res {
         Ok(records) => {
             let count = records.len();
             index.write().rebuild_from_scanned(records);
@@ -102,15 +105,24 @@ async fn writer_loop(
         let data_len = req.data.len();
 
         // Check if rotation will happen and evict first.
-        let (cur_idx, used, cap) = pool.status();
+        let (cur_idx, used, cap) = {
+            let p = pool.read();
+            p.status()
+        };
+        
         let record_size = crate::storage::chunk_pool::RECORD_HEADER_SIZE + data_len as u64;
         if used + record_size > cap {
             // Next pool slot will be overwritten.
-            let next_idx = (cur_idx + 1) % pool.pool_count();
+            let next_idx = (cur_idx + 1) % pool.read().pool_count();
             index.write().evict_pool(next_idx);
         }
 
-        match pool.append(&camera_id, req.start_ts, req.end_ts, &req.data) {
+        let append_res = {
+            let mut p = pool.write();
+            p.append(&camera_id, req.start_ts, req.end_ts, &req.data)
+        };
+        
+        match append_res {
             Ok(loc) => {
                 let seg_id = index.write().insert(
                     &camera_id,

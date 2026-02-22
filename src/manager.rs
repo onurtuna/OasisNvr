@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use parking_lot::RwLock;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -33,6 +34,8 @@ pub struct RecordingManager {
     pub index: SharedIndex,
     /// Shared pool reader counters for safe reads.
     pub read_counters: Arc<PoolReadCounters>,
+    /// Global shared pool reference.
+    pub pool: Arc<RwLock<ChunkPool>>,
     /// Channel sender — cloned to each new camera worker.
     writer_tx: mpsc::Sender<WriteRequest>,
     /// Segment duration used when spawning new workers.
@@ -56,10 +59,12 @@ impl RecordingManager {
 
         // Open the global chunk pool.
         let pool = ChunkPool::open(base, pool_bytes, config.storage.max_pools)?;
+        let read_counters = pool.read_counters.clone();
+        let shared_pool = Arc::new(RwLock::new(pool));
 
         // Spawn the single global writer.
-        let (writer_tx, index, read_counters, writer_handle) =
-            global_writer::spawn_writer(pool, config.storage.writer_queue_size);
+        let (writer_tx, index, writer_handle) =
+            global_writer::spawn_writer(shared_pool.clone(), config.storage.writer_queue_size);
 
         info!(
             pools = config.storage.max_pools,
@@ -85,6 +90,7 @@ impl RecordingManager {
             writer_handle,
             index,
             read_counters,
+            pool: shared_pool,
             writer_tx,
             segment_duration: segment_dur,
         })

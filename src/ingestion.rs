@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tracing::{error, info, warn};
 
-use crate::camera::{CameraStream, supervised_connect};
+use crate::camera::supervised_connect;
 use crate::config::CameraConfig;
 use crate::storage::global_writer::WriteRequest;
 
@@ -43,16 +43,9 @@ impl CameraWorker {
     async fn run(self, config: CameraConfig, segment_duration: Duration) {
         info!(camera = self.camera_id, "Ingestion worker started");
 
-        // Channel through which the supervised connector delivers fresh streams.
-        let (stream_tx, mut stream_rx) = mpsc::channel::<CameraStream>(1);
-        let cam_cfg = config.clone();
-        tokio::spawn(async move {
-            supervised_connect(cam_cfg, stream_tx).await;
-        });
-
         loop {
             // Wait for a connected stream.
-            let Some(mut stream) = stream_rx.recv().await else {
+            let Some(mut stream) = supervised_connect(&config).await else {
                 info!(camera = self.camera_id, "Stream supervisor shut down, exiting");
                 break;
             };

@@ -117,13 +117,9 @@ impl Drop for CameraStream {
 
 /// Spawn a task that keeps a camera connected, reconnecting on failure.
 ///
-/// Returns a `Receiver` of ready-to-use `CameraStream`s. The caller consumes
-/// streams one at a time; when a stream errors or closes the supervisor
-/// automatically reconnects and sends a fresh stream.
-pub async fn supervised_connect(
-    config: CameraConfig,
-    stream_tx: mpsc::Sender<CameraStream>,
-) {
+/// Returns a ready-to-use `CameraStream`. When a stream errors or closes,
+/// call this again to automatically reconnect with exponential backoff.
+pub async fn supervised_connect(config: &CameraConfig) -> Option<CameraStream> {
     let max_attempts = if config.max_reconnect_attempts == 0 {
         u32::MAX
     } else {
@@ -134,19 +130,12 @@ pub async fn supervised_connect(
     loop {
         if attempt >= max_attempts {
             error!(camera = config.id, "Max reconnect attempts reached, giving up");
-            break;
+            return None;
         }
 
-        match CameraStream::connect(&config) {
+        match CameraStream::connect(config) {
             Ok(stream) => {
-                attempt = 0; // Reset backoff on success.
-                if stream_tx.send(stream).await.is_err() {
-                    // Receiver dropped; manager is shutting down.
-                    break;
-                }
-                // The receiver signals readiness for a new stream by dropping
-                // the previous one. We wait briefly then loop.
-                sleep(Duration::from_millis(500)).await;
+                return Some(stream);
             }
             Err(e) => {
                 attempt += 1;

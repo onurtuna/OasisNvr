@@ -1,6 +1,6 @@
 # NVR — Network Video Recorder
 
-> **⚠️ License Notice:** This software is provided for **non-commercial use only**. Commercial use is strictly prohibited. If you use, modify, or redistribute this software, you must provide **proper attribution** to the original author. See [License](#license) below.
+> **⚠️ License Notice:** This software is provided for **non-commercial use only**. Commercial use is strictly prohibited. If you use, modify, or redistribute this software, you must provide **proper attribution** to the original author.
 
 A high-performance Network Video Recorder written in Rust. Records RTSP streams from multiple IP cameras into pre-allocated binary pool files using a ring buffer strategy. Designed for HDD-based storage with sequential I/O optimization — **no SSD required**.
 
@@ -188,13 +188,5 @@ max_reconnect_attempts = 0        # 0 = unlimited
 - **No extra disk I/O** — index lives in RAM, no separate index file written during recording
 - **Safe concurrent reads** — per-pool atomic counters prevent rotation during active reads (RAII guards)
 - **Rotation timeout** — writer waits up to 5s for readers before rotating, ensuring read integrity
-
-## License
-
-This project is licensed under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
-
-- ✅ Personal and educational use
-- ✅ Modification and redistribution with attribution
-- ❌ Commercial use without written permission
-
+  
 © 2026 Onur Tuna. All rights reserved.

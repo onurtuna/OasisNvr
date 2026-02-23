@@ -112,7 +112,7 @@ async function fetchStatus() {
 
         els.dashCams.textContent = data.cameras.length;
         els.dashPools.textContent = data.pool_files;
-        els.dashUsage.textContent = `${data.active_pool_pct.toFixed(2)}%`;
+        els.dashUsage.textContent = `Pool ${data.active_pool_idx}: ${data.active_pool_pct.toFixed(1)}%`;
         els.dashSegs.textContent = data.total_segments;
 
         els.statusText.textContent = "System Online";
@@ -138,6 +138,40 @@ async function fetchCameras() {
 
         // Setup Live Grid only with active cameras
         setupLiveGrid();
+
+        // Setup Dashboard Camera List
+        const dashCamList = document.getElementById('dash-camera-list');
+        if (dashCamList && state.cams.length > 0) {
+            const activeDashboardCams = state.cams.filter(c => c.status === 'active');
+
+            if (activeDashboardCams.length > 0) {
+                dashCamList.innerHTML = activeDashboardCams.map(cam => `
+                    <div class="segment-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; cursor: default;">
+                        <div>
+                            <div style="font-weight:600; font-size:1.05rem;">
+                                ${cam.name || cam.id} <span style="color:var(--text-muted); font-size:0.85rem; font-weight:normal;">(${cam.id})</span>
+                            </div>
+                            <div style="font-size:0.85rem; color:var(--text-muted); margin-top:2px;">
+                                ${cam.url || 'No URL available'}
+                            </div>
+                        </div>
+                        <div>
+                            <span style="display:inline-block; padding:4px 8px; border-radius:4px; font-size:0.75rem; font-weight:600; text-transform:uppercase; 
+                                background: rgba(102, 187, 106, 0.15); 
+                                color: var(--accent-success); 
+                                border: 1px solid rgba(102, 187, 106, 0.3);">
+                                ${cam.status}
+                            </span>
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                dashCamList.innerHTML = '<div class="empty-state">No active cameras configured</div>';
+            }
+        } else if (dashCamList) {
+            dashCamList.innerHTML = '<div class="empty-state">No cameras configured</div>';
+        }
+
     } catch (err) {
         console.error("Error fetching cameras:", err);
     }

@@ -63,6 +63,12 @@ pub struct VodParams {
     to: String,
 }
 
+#[derive(Deserialize)]
+pub struct LoginParams {
+    username: String,
+    password: String,
+}
+
 #[derive(Serialize)]
 struct StatusResponse {
     pool_files: usize,
@@ -116,6 +122,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // Camera management
         .route("/api/cameras", get(handle_list_cameras).post(handle_add_camera))
         .route("/api/cameras/{camera_id}", delete(handle_remove_camera))
+        // Authentication
+        .route("/api/login", axum::routing::post(handle_login))
         // Serve static frontend files
         .fallback_service(ServeDir::new("frontend"))
         .layer(CorsLayer::permissive())
@@ -142,6 +150,24 @@ pub async fn start_server(state: Arc<AppState>, port: u16) {
 }
 
 // ──────────────── handlers ────────────────────────────────────────────────
+
+async fn handle_login(
+    State(state): State<Arc<AppState>>,
+    axum::Json(params): axum::Json<LoginParams>,
+) -> impl IntoResponse {
+    let cfg = state.config.read().unwrap();
+    if params.username == cfg.api.username && params.password == cfg.api.password {
+        (
+            StatusCode::OK,
+            axum::Json(serde_json::json!({ "token": "oasis_logged_in" })),
+        )
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({ "error": "Invalid username or password" })),
+        )
+    }
+}
 
 async fn handle_status(
     State(state): State<Arc<AppState>>,

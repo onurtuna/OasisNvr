@@ -28,16 +28,29 @@ pub struct ApiConfig {
     /// Port to listen on.
     #[serde(default = "default_api_port")]
     pub port: u16,
+    /// Optional username for web UI login. (Defaults to "oasis" if not provided)
+    #[serde(default = "default_api_username")]
+    pub username: String,
+    /// Optional password for web UI login. (Defaults to "1234" if not provided)
+    #[serde(default = "default_api_password")]
+    pub password: String,
 }
 
 impl Default for ApiConfig {
     fn default() -> Self {
-        Self { enabled: default_api_enabled(), port: default_api_port() }
+        Self { 
+            enabled: default_api_enabled(), 
+            port: default_api_port(),
+            username: default_api_username(),
+            password: default_api_password(),
+        }
     }
 }
 
 fn default_api_enabled() -> bool { true }
 fn default_api_port() -> u16 { 8080 }
+fn default_api_username() -> String { "oasis".to_string() }
+fn default_api_password() -> String { "1234".to_string() }
 
 /// Storage parameters for the global shared pool.
 #[derive(Debug, Deserialize, Serialize, Clone)]

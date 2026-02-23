@@ -21,6 +21,12 @@ If you use, modify, or redistribute this software, you must provide proper attri
     <link rel="stylesheet" href="style.css">
     <!-- HLS.js for video playback (loaded locally for offline use) -->
     <script src="hls.min.js"></script>
+    <!-- Authentication Check -->
+    <script>
+        if (localStorage.getItem('nvr_auth_token') !== 'oasis_logged_in') {
+            window.location.href = 'login.html';
+        }
+    </script>
 </head>
 
 <body>
@@ -92,7 +98,19 @@ If you use, modify, or redistribute this software, you must provide proper attri
         <main class="main-content">
             <header class="top-header">
                 <h1 id="page-title">Dashboard</h1>
-                <div class="time-display" id="clock">00:00:00</div>
+                <div class="header-right" style="display: flex; align-items: center; gap: 20px;">
+                    <div class="time-display" id="clock">00:00:00</div>
+                    <button id="btn-logout" class="btn btn-secondary"
+                        style="padding: 6px 12px; font-size: 0.85rem; width: auto; background: rgba(239, 83, 80, 0.15); color: #ef5350; border: 1px solid rgba(239, 83, 80, 0.3);">
+                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2"
+                            fill="none" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                            <polyline points="16 17 21 12 16 7"></polyline>
+                            <line x1="21" y1="12" x2="9" y2="12"></line>
+                        </svg>
+                        Logout
+                    </button>
+                </div>
             </header>
 
             <div class="content-container">
@@ -282,6 +300,13 @@ If you use, modify, or redistribute this software, you must provide proper attri
 
     <!-- Scripts -->
     <script src="app.js"></script>
+    <script>
+        // Logout handler
+        document.getElementById('btn-logout')?.addEventListener('click', () => {
+            localStorage.removeItem('nvr_auth_token');
+            window.location.href = 'login.html';
+        });
+    </script>
 </body>
 
 </html>

@@ -196,5 +196,5 @@ This project is licensed under [CC BY-NC 4.0](https://creativecommons.org/licens
 - ✅ Personal and educational use
 - ✅ Modification and redistribution with attribution
 - ❌ Commercial use without written permission
-
+  
 © 2026 Onur Tuna. All rights reserved.

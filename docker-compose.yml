@@ -1,0 +1,10 @@
+services:
+  nvr:
+    build: .
+    container_name: oasis_nvr
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./recordings:/app/recordings
+      - ./config.toml:/app/config.toml:ro
+    restart: unless-stopped

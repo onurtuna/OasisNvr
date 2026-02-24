@@ -1,0 +1,9 @@
+target/
+.git/
+.vscode/
+.idea/
+recordings/
+export.ts
+*.ts
+*.swp
+.DS_Store

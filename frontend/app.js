@@ -73,6 +73,11 @@ els.navItems.forEach(item => {
         els.views.forEach(view => view.classList.remove('active'));
         document.getElementById(targetId).classList.add('active');
 
+        // Leaving Live View: stop HLS players so they stop polling for live segments
+        if (targetId !== 'live-view') {
+            stopLiveCameras();
+        }
+
         // Handle specific view logistics
         if (targetId === 'live-view') {
             refreshLiveCameras();
@@ -204,11 +209,16 @@ function setupLiveGrid() {
     });
 }
 
+// Stop all live HLS players (e.g. when navigating away from Live View)
+function stopLiveCameras() {
+    Object.values(state.hlsPlayers).forEach(p => p.destroy());
+    state.hlsPlayers = {};
+}
+
 // Start HLS for all live cameras when view is active
 function refreshLiveCameras() {
     // Clean up old players
-    Object.values(state.hlsPlayers).forEach(p => p.destroy());
-    state.hlsPlayers = {};
+    stopLiveCameras();
 
     const activeCams = state.cams.filter(c => c.status === 'active');
 

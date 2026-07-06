@@ -1,18 +1,19 @@
-# Test amaçlı 4 adet sahte RTSP kamera akışı.
-# MediaMTX bir RTSP sunucusu olarak çalışır, 4 ffmpeg container'ı da
-# lavfi test kaynaklarını (testsrc/testsrc2/smptebars/smptehdbars)
-# bu sunucuya push eder.
+# 4 fake RTSP camera streams for testing purposes.
+# MediaMTX acts as an RTSP server; the cam1-3 ffmpeg (H.264) containers
+# push lavfi test sources (testsrc/testsrc2/smptebars) to it.
+# cam4 hosts its own RTSP server instead, to test the AV1 codec
+# (see the cam4 service comment below).
 #
-# Kullanım:
+# Usage:
 #   docker compose -f docker-compose.test-streams.yml up -d
 #   docker compose -f docker-compose.test-streams.yml down
 #
-# Yayınlar (host'tan erişim):
+# Streams (host access):
 #   rtsp://localhost:8554/cam1
 #   rtsp://localhost:8554/cam2
 #   rtsp://localhost:8554/cam3
-#   rtsp://localhost:8554/cam4
-#   (tarayıcıdan hızlı bakmak için HLS: http://localhost:8888/cam1/index.m3u8)
+#   rtsp://localhost:8555/cam4  (AV1, directly from the cam4 container)
+#   (for a quick look in a browser, HLS: http://localhost:8888/cam1/index.m3u8)
 
 services:
   mediamtx:
@@ -68,17 +69,17 @@ services:
       -c:a aac
       -f rtsp -rtsp_transport tcp rtsp://mediamtx:8554/cam3"
 
+  # AV1 test camera: unlike the other 3 (push-based ffmpeg -> mediamtx),
+  # this one runs as an RTSP *server*, just like a real IP camera —
+  # ffmpeg's RTP muxer doesn't support AV1 payloading, and GStreamer's
+  # push element (rtspclientsink) isn't in the Debian package, so it
+  # hosts its own RTSP server (av1enc + rtpav1pay) instead of pushing to
+  # mediamtx. The app (config.toml) connects to it directly: rtsp://cam4:8554/cam4
   cam4:
-    image: jrottenberg/ffmpeg:6.1-ubuntu
+    build:
+      context: .
+      dockerfile: test-streams/av1-cam.Dockerfile
     container_name: test_cam4
-    depends_on:
-      - mediamtx
+    ports:
+      - "8555:8554"   # RTSP (AV1) — from host: rtsp://localhost:8555/cam4
     restart: unless-stopped
-    entrypoint: []
-    command: >
-      sh -c "sleep 2 && ffmpeg -re
-      -f lavfi -i smptehdbars=size=1280x720:rate=25
-      -f lavfi -i sine=frequency=1760:sample_rate=44100
-      -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p
-      -c:a aac
-      -f rtsp -rtsp_transport tcp rtsp://mediamtx:8554/cam4"

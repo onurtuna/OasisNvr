@@ -43,6 +43,13 @@ impl CameraWorker {
     async fn run(self, config: CameraConfig, segment_duration: Duration) {
         info!(camera = self.camera_id, "Ingestion worker started");
 
+        // Once the nominal segment duration elapses, keep recording until the
+        // next keyframe so every cut segment starts on a sync point (an
+        // MPEG-TS file that starts mid-GOP cannot be decoded from its first
+        // frame). This caps how long we're willing to wait for that keyframe
+        // before cutting anyway, bounding worst-case segment size.
+        let max_keyframe_wait = segment_duration;
+
         loop {
             // Wait for a connected stream.
             let Some(mut stream) = supervised_connect(&config).await else {
@@ -54,24 +61,28 @@ impl CameraWorker {
             let mut segment_buf: Vec<u8> = Vec::new();
             let mut seg_start = Utc::now();
             let mut deadline = Instant::now() + segment_duration;
+            let mut awaiting_keyframe = false;
 
             loop {
-                // Wait for the next buffer OR segment deadline.
+                // Wait for the next buffer OR the current deadline.
                 let vbuf = tokio::select! {
                     biased;
-                    _ = tokio::time::sleep_until(deadline) => {
-                        // Flush current segment even if no new buffer arrived.
-                        None
-                    }
+                    _ = tokio::time::sleep_until(deadline) => None,
                     buf = stream.read_buffer() => buf,
                 };
 
+                // If the nominal segment duration just elapsed, don't cut
+                // immediately — hold off until a keyframe arrives.
+                if !awaiting_keyframe && Instant::now() >= deadline {
+                    awaiting_keyframe = true;
+                    deadline = Instant::now() + max_keyframe_wait;
+                }
+
                 match vbuf {
                     Some(vb) => {
-                        segment_buf.extend_from_slice(&vb.data);
-
-                        // Check if the segment duration has elapsed.
-                        if Instant::now() >= deadline {
+                        if awaiting_keyframe && vb.is_keyframe {
+                            // Cut right before this keyframe so the new
+                            // segment starts on a sync point.
                             self.flush_segment(
                                 &mut segment_buf,
                                 seg_start,
@@ -79,10 +90,29 @@ impl CameraWorker {
                                 &mut deadline,
                                 segment_duration,
                             ).await;
+                            awaiting_keyframe = false;
+                            deadline = Instant::now() + segment_duration;
                         }
+                        segment_buf.extend_from_slice(&vb.data);
                     }
                     None => {
-                        // Deadline triggered or stream ended.
+                        if !awaiting_keyframe {
+                            // Deadline hadn't elapsed, so this can only mean
+                            // the stream/channel closed.
+                            if !segment_buf.is_empty() {
+                                self.flush_segment(
+                                    &mut segment_buf,
+                                    seg_start,
+                                    &mut seg_start,
+                                    &mut deadline,
+                                    segment_duration,
+                                ).await;
+                            }
+                            warn!(camera = self.camera_id, "Stream closed, waiting for reconnect");
+                            break;
+                        }
+
+                        // Hard deadline: no keyframe arrived in time, cut anyway.
                         if !segment_buf.is_empty() {
                             self.flush_segment(
                                 &mut segment_buf,
@@ -91,12 +121,8 @@ impl CameraWorker {
                                 &mut deadline,
                                 segment_duration,
                             ).await;
-                        } else {
-                            // Stream closed without data — reconnect.
-                            warn!(camera = self.camera_id, "Stream closed, waiting for reconnect");
-                            break;
                         }
-                        // Reset deadline after flush.
+                        awaiting_keyframe = false;
                         deadline = Instant::now() + segment_duration;
                     }
                 }

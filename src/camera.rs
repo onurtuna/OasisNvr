@@ -28,6 +28,11 @@ use crate::error::{NvrError, Result};
 pub struct VideoBuffer {
     pub data: Vec<u8>,
     pub pts_us: Option<i64>, // presentation timestamp in microseconds
+    /// True if this chunk starts at a keyframe (sync point), i.e. it does
+    /// NOT carry the `DELTA_UNIT` flag. Used by the ingestion worker to cut
+    /// segments on keyframe boundaries so every recorded `.ts` file is
+    /// independently decodable from its first frame.
+    pub is_keyframe: bool,
 }
 
 /// Handle to a running GStreamer pipeline for one RTSP camera.
@@ -72,9 +77,11 @@ impl CameraStream {
                     let buf = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buf.map_readable().map_err(|_| gst::FlowError::Error)?;
                     let pts_us = buf.pts().map(|t| t.useconds() as i64);
+                    let is_keyframe = !buf.flags().contains(gst::BufferFlags::DELTA_UNIT);
                     let vbuf = VideoBuffer {
                         data: map.as_slice().to_vec(),
                         pts_us,
+                        is_keyframe,
                     };
                     // Non-blocking send; drop if channel is full.
                     let _ = tx_clone.try_send(vbuf);

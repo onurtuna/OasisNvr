@@ -30,8 +30,8 @@ cam3 ──┤                         │                .bin      ├─ /api/
 cam4 ──┘                         ▼                          ├─ /api/hls/.../live.m3u8
   ↕                        SegmentIndex (RAM)               ├─ /api/hls/.../vod.m3u8
 POST/DELETE                      ▲                          ├─ /api/dash/.../manifest.mpd
-/api/cameras          rebuilt from pool files on startup     ├─ /api/cameras (GET/POST/DELETE)
-                                                              └─ /api/login
+/api/cameras          rebuilt from pool files on startup    ├─ /api/cameras (GET/POST/DELETE)
+                                                            └─ /api/login
 ```
 
 All cameras share a single write queue. The writer appends records sequentially into pre-allocated pool files — the HDD head only moves forward. The HTTP API reads segments directly from pool files using per-pool read guards.

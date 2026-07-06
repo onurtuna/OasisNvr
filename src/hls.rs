@@ -65,11 +65,12 @@ pub fn generate_live_playlist(
     writeln!(m3u8, "#EXT-X-MEDIA-SEQUENCE:{}", first_seq).unwrap();
 
     // Server control: CAN-BLOCK-RELOAD for low-latency polling.
-    // HOLD-BACK tells the player to stay 3× target duration behind live edge.
+    // HOLD-BACK tells the player how far behind live edge to stay; kept as
+    // close to a single segment as the spec allows to minimize latency.
     writeln!(
         m3u8,
         "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,HOLD-BACK={:.1}",
-        segment_duration_secs as f64 * 3.0,
+        segment_duration_secs as f64,
     )
     .unwrap();
 

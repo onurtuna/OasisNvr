@@ -521,8 +521,8 @@ const status = document.getElementById("status");
 
 if (Hls.isSupported()) {{
   const hls = new Hls({{
-    liveSyncDurationCount: 3,
-    liveMaxLatencyDurationCount: 6,
+    liveSyncDurationCount: 1,
+    liveMaxLatencyDurationCount: 3,
     enableWorker: true,
   }});
   hls.loadSource(src);

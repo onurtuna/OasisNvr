@@ -229,7 +229,7 @@ function refreshLiveCameras() {
         const src = `/api/hls/${cam.id}/live.m3u8`;
 
         if (Hls.isSupported()) {
-            const hls = new Hls({ liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 6 });
+            const hls = new Hls({ liveSyncDurationCount: 1, liveMaxLatencyDurationCount: 3 });
             hls.loadSource(src);
             hls.attachMedia(video);
             hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(e => console.log(e)));

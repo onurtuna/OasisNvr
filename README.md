@@ -66,6 +66,8 @@ sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 ```
 
+> **Windows kullanıcısı mısın?** GStreamer'ı native (MSVC) kurup Rust ile derlemek yerine, aşağıdaki [Windows Setup (Docker)](#windows-setup-docker---önerilen-yöntem) bölümünü kullan. Tek gereksinim Docker Desktop.
+
 ## Quick Start
 
 ```bash
@@ -79,6 +81,85 @@ cp config.example.toml config.toml
 # Start recording (HTTP API starts automatically on port 8080)
 cargo run --release -- record --config config.toml
 ```
+
+## Windows Setup (Docker — Önerilen Yöntem)
+
+Windows'ta `gstreamer-rs` crate'ini native olarak derlemek (MSVC toolchain + GStreamer development kit + `pkg-config`/ortam değişkenleri kurulumu) oldukça zahmetlidir. Bunun yerine proje zaten bir `Dockerfile` ve `docker-compose.yml` içeriyor — GStreamer ve Rust container içinde hazır geldiği için Windows'a **hiçbir şey kurmana gerek yok**, sadece Docker Desktop yeterli.
+
+### 1. Docker Desktop'ı kur ve başlat
+
+1. [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) üzerinden Docker Desktop'ı indir ve kur (kurulum sırasında **WSL 2 backend** seçeneğini işaretli bırak — varsayılan budur).
+2. Kurulum bitince Windows'u yeniden başlat (isteniyorsa).
+3. Docker Desktop uygulamasını aç ve sol altta **"Engine running"** yazısını görene kadar bekle. İlk açılışta Docker kendi WSL2 alt sistemlerini (`docker-desktop`, `docker-desktop-data`) otomatik kurar, ekstra bir Linux dağıtımı kurmana gerek yoktur.
+4. Doğrulamak için bir terminalde:
+   ```powershell
+   docker version
+   docker compose version
+   ```
+   İkisi de sürüm bilgisi döndürmeli (hata değil).
+
+### 2. Projeyi hazırla
+
+Proje klasöründe (bu depo) bir PowerShell açıp:
+
+```powershell
+# Örnek config'i kopyala
+copy config.example.toml config.toml
+
+# Kendi kamera RTSP URL'lerinle düzenle
+notepad config.toml
+```
+
+`config.toml` içinde en az şunları güncelle:
+
+- `[[cameras]]` bloklarındaki `url = "rtsp://..."` adreslerini kendi kameralarınla değiştir (kullanıcı adı/şifre varsa `rtsp://user:pass@ip:port/yol` formatında).
+- `storage.base_path` — container içinde bu her zaman `./recordings` olarak kalabilir; Windows tarafında hangi diske yazılacağını `docker-compose.yml`'daki `volumes` ile ayarlıyoruz (aşağıya bak).
+
+Kayıtların hangi Windows diskine/klasörüne yazılacağını belirlemek için `docker-compose.yml` dosyasını aç ve gerekirse `./recordings` yolunu değiştir (örn. ayrı bir HDD kullanmak istersen):
+
+```yaml
+volumes:
+  - D:/nvr-recordings:/app/recordings   # örn. ayrı bir HDD/klasör
+  - ./config.toml:/app/config.toml:ro
+```
+
+### 3. Build & çalıştır
+
+```powershell
+# İlk kurulumda image'ı derle ve arka planda başlat
+docker compose up --build -d
+
+# Logları izle
+docker compose logs -f
+
+# Durdur
+docker compose down
+
+# Config veya kod değiştirdikten sonra yeniden derleyip başlat
+docker compose up --build -d
+```
+
+### 4. Kullan
+
+Tarayıcıdan `http://localhost:8080/` adresine git — kontrol panelini görmelisin. Windows Güvenlik Duvarı ilk bağlantıda izin isteyebilir, "İzin ver"e bas.
+
+### Native (Rust + GStreamer) ile geliştirme yapacaksan
+
+`cargo run`/`cargo build` ile doğrudan Windows üzerinde çalıştırmak istersen (debug için), ekstra olarak şunlar gerekir — bu yol Docker'dan çok daha karmaşıktır:
+
+1. [Rust'ı kur](https://rustup.rs/) (MSVC toolchain, `rustup-init.exe` varsayılanı seçer).
+2. [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) — "Desktop development with C++" iş yükü (MSVC linker için gerekli).
+3. [GStreamer MSVC development installer](https://gstreamer.freedesktop.org/download/#windows) — hem **runtime** hem **development** MSVC 64-bit paketlerini kur.
+4. Kurulumdan sonra ortam değişkenlerini ayarla (kalıcı yapmak için Sistem Ortam Değişkenleri'nden):
+   ```powershell
+   $env:GSTREAMER_1_0_ROOT_MSVC_X86_64 = "C:\gstreamer\1.0\msvc_x86_64\"
+   $env:PATH += ";$env:GSTREAMER_1_0_ROOT_MSVC_X86_64\bin"
+   $env:PKG_CONFIG_PATH = "$env:GSTREAMER_1_0_ROOT_MSVC_X86_64\lib\pkgconfig"
+   ```
+5. Yeni bir terminal aç ve doğrula: `gst-launch-1.0.exe --version`
+6. Sonra normal `cargo build --release` / `cargo run --release -- record --config config.toml` adımlarını izleyebilirsin.
+
+Bu yol test edilmemiştir (Docker yöntemi önerilir); sorun yaşarsan `pkg-config` hatalarının çoğu yukarıdaki ortam değişkenlerinin eksik/yanlış olmasından kaynaklanır.
 
 ## Built-in Web Interface
 

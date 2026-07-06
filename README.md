@@ -237,17 +237,17 @@ curl -X DELETE http://localhost:8080/api/cameras/cam5
 
 ```bash
 # Start recording + HTTP API
-nvr record --config config.toml
+oasis record --config config.toml
 
 # Offline status (scans pool files)
-nvr status --config config.toml
+oasis status --config config.toml
 
 # Offline segment listing
-nvr list --config config.toml --camera cam1
+oasis list --config config.toml --camera cam1
 
 # Offline export to file
-nvr export --config config.toml --camera cam1 \
-    --from "2026-02-19T14:00:00" --to "2026-02-19T15:00:00" -o kayit.ts
+oasis export --config config.toml --camera cam1 \
+    --from "2026-02-19T14:00:00" --to "2026-02-19T15:00:00" -o output.ts
 ```
 
 ## Configuration

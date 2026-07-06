@@ -6,10 +6,10 @@
 //! NVR — Network Video Recorder
 //!
 //! Usage:
-//!   nvr record --config config.toml
-//!   nvr status --config config.toml
-//!   nvr list   --config config.toml --camera cam1
-//!   nvr export --config config.toml --camera cam1 --from "2026-02-19T14:00:00" --to "2026-02-19T15:00:00" -o output.ts
+//!   oasis record --config config.toml
+//!   oasis status --config config.toml
+//!   oasis list   --config config.toml --camera cam1
+//!   oasis export --config config.toml --camera cam1 --from "2026-02-19T14:00:00" --to "2026-02-19T15:00:00" -o output.ts
 
 use std::path::PathBuf;
 
@@ -26,7 +26,7 @@ use nvr::storage::chunk_pool::ChunkPool;
 use nvr::storage::index::SegmentIndex;
 
 #[derive(Parser)]
-#[command(name = "nvr", about = "Network Video Recorder", version)]
+#[command(name = "oasis", about = "Network Video Recorder", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

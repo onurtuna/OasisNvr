@@ -8,9 +8,11 @@
 //! Endpoints:
 //!   GET    /api/status                                → system status (JSON)
 //!   GET    /api/list?camera=cam1                      → segment list (JSON)
-//!   GET    /api/export?camera=cam1&from=...&to=...    → download .ts
+//!   GET    /api/export?camera=cam1&from=...&to=...    → download .mp4
 //!   GET    /api/hls/{camera}/live.m3u8                → LL-HLS live playlist
 //!   GET    /api/hls/{camera}/vod.m3u8?from=...&to=... → VOD playlist
+//!   GET    /api/dash/{camera}/manifest.mpd            → DASH live manifest
+//!   GET    /api/dash/{camera}/manifest.mpd?from=...&to=... → DASH VOD manifest
 //!   GET    /api/cameras                               → list active cameras
 //!   POST   /api/cameras                               → add camera (hot)
 //!   DELETE /api/cameras/{id}                          → remove camera (hot)
@@ -29,8 +31,11 @@ use tower_http::cors::CorsLayer;
 use tracing::{error, info};
 
 use crate::config::{CameraConfig, Config};
+use crate::dash;
+use crate::error::NvrError;
 use crate::hls;
 use crate::manager::RecordingManager;
+use crate::playback;
 use crate::storage::chunk_pool::{ChunkPool, PoolReadCounters};
 use crate::storage::index::SegmentIndex;
 
@@ -61,6 +66,14 @@ pub struct ExportParams {
 pub struct VodParams {
     from: String,
     to: String,
+}
+
+#[derive(Deserialize)]
+pub struct DashParams {
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    to: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -116,9 +129,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // HLS endpoints
         .route("/api/hls/{camera_id}/live.m3u8", get(handle_hls_live))
         .route("/api/hls/{camera_id}/vod.m3u8", get(handle_hls_vod))
-        .route("/api/hls/{camera_id}/segment/ts/{segment_id}", get(handle_hls_segment))
+        .route("/api/hls/{camera_id}/segment/mp4/{segment_id}", get(handle_hls_segment))
         .route("/api/hls/{camera_id}/player", get(handle_hls_player))
         .route("/api/hls/{camera_id}/vod/player", get(handle_vod_player))
+        // DASH endpoint (same segments as HLS, different manifest)
+        .route("/api/dash/{camera_id}/manifest.mpd", get(handle_dash_manifest))
         // Camera management
         .route("/api/cameras", get(handle_list_cameras).post(handle_add_camera))
         .route("/api/cameras/{camera_id}", delete(handle_remove_camera))
@@ -275,7 +290,7 @@ async fn handle_export(
     };
     let base_path = state.config.read().unwrap().storage.base_path.clone();
     let max_pools = state.config.read().unwrap().storage.max_pools;
-    
+
     let pool = match ChunkPool::open(
         &base_path,
         pool_bytes,
@@ -290,44 +305,75 @@ async fn handle_export(
         }
     };
 
-    let index = state.index.read();
-    let segments = index.segments_in_range(&params.camera, from_utc, to_utc);
+    // Acquire read guards on every pool touched by this range up front, so
+    // the writer can't rotate any of them out from under the remux below.
+    let _guards: Vec<_> = {
+        let index = state.index.read();
+        index
+            .segments_in_range(&params.camera, from_utc, to_utc)
+            .iter()
+            .map(|s| s.location.pool_idx)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .map(|idx| state.read_counters.acquire(idx))
+            .collect()
+    };
 
-    if segments.is_empty() {
-        return (
-            StatusCode::NOT_FOUND,
-            axum::Json(serde_json::json!({
-                "error": format!("No segments found for camera '{}' in range {} — {}", params.camera, from_utc, to_utc)
-            })),
-        ).into_response();
-    }
+    // Segments are independent, self-initializing fMP4 files, so exporting a
+    // range needs a real demux+remux (not raw byte concatenation) into one
+    // continuous playable file.
+    let tmp_output = std::env::temp_dir().join(format!(
+        "nvr_export_api_{}_{}.mp4",
+        std::process::id(),
+        chrono::Utc::now().timestamp_millis()
+    ));
 
-    // Read and concatenate all segment data.
-    // Acquire read guards on pool(s) to prevent rotation during export.
-    let mut body = Vec::new();
-    for seg in &segments {
-        let _guard = state.read_counters.acquire(seg.location.pool_idx);
-        match pool.read_segment_data(&seg.location) {
-            Ok(data) => body.extend_from_slice(&data),
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    axum::Json(serde_json::json!({"error": format!("Read error: {e}")})),
-                ).into_response();
-            }
+    let export_result = {
+        let index = state.index.read();
+        playback::export_range(&pool, &index, &params.camera, from_utc, to_utc, &tmp_output)
+    };
+    drop(_guards);
+
+    let segment_count = match export_result {
+        Ok(count) => count,
+        Err(NvrError::Storage(msg)) => {
+            let _ = std::fs::remove_file(&tmp_output);
+            return (
+                StatusCode::NOT_FOUND,
+                axum::Json(serde_json::json!({"error": msg})),
+            ).into_response();
         }
-    }
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp_output);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({"error": e.to_string()})),
+            ).into_response();
+        }
+    };
+
+    let body = match std::fs::read(&tmp_output) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp_output);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({"error": format!("Read exported file: {e}")})),
+            ).into_response();
+        }
+    };
+    let _ = std::fs::remove_file(&tmp_output);
 
     info!(
         camera = params.camera,
-        segments = segments.len(),
+        segments = segment_count,
         bytes = body.len(),
         "Export streamed via API"
     );
 
-    // Return as downloadable MPEG-TS.
+    // Return as downloadable MP4.
     let filename = format!(
-        "{}_{}_to_{}.ts",
+        "{}_{}_to_{}.mp4",
         params.camera,
         params.from.replace(':', "-"),
         params.to.replace(':', "-")
@@ -336,7 +382,7 @@ async fn handle_export(
     (
         StatusCode::OK,
         [
-            ("content-type", "video/mp2t"),
+            ("content-type", "video/mp4"),
             ("content-disposition", &format!("attachment; filename=\"{filename}\"")),
         ],
         body,
@@ -582,7 +628,8 @@ if (Hls.isSupported()) {{
     )
 }
 
-/// Serve a single segment's raw MPEG-TS data by segment_id.
+/// Serve a single segment's raw fMP4 data by segment_id. Shared by both HLS
+/// and DASH — the segment is self-initializing (own `ftyp+moov+moof+mdat`).
 async fn handle_hls_segment(
     State(state): State<Arc<AppState>>,
     Path((camera_id, segment_id)): Path<(String, u64)>,
@@ -621,13 +668,68 @@ async fn handle_hls_segment(
     match p.read_segment_data(&seg.location) {
         Ok(data) => (
             StatusCode::OK,
-            [("content-type", "video/mp2t")],
+            [("content-type", "video/mp4")],
             data,
         ).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [("content-type", "text/plain")],
             Vec::from(format!("Read error: {e}").as_bytes()),
+        ).into_response(),
+    }
+}
+
+/// DASH manifest for a camera. Without `from`/`to`, returns a live
+/// (`dynamic`) manifest; with both, a VOD (`static`) manifest for that range.
+/// References the exact same segments as HLS via `handle_hls_segment`.
+async fn handle_dash_manifest(
+    State(state): State<Arc<AppState>>,
+    Path(camera_id): Path<String>,
+    Query(params): Query<DashParams>,
+) -> impl IntoResponse {
+    let seg_dur = state.config.read().unwrap().storage.segment_duration_secs;
+
+    let mpd = match (params.from, params.to) {
+        (Some(from), Some(to)) => {
+            let from_naive = match NaiveDateTime::parse_from_str(&from, "%Y-%m-%dT%H:%M:%S") {
+                Ok(dt) => dt,
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        [("content-type", "text/plain")],
+                        format!("Invalid 'from': {e}"),
+                    ).into_response();
+                }
+            };
+            let to_naive = match NaiveDateTime::parse_from_str(&to, "%Y-%m-%dT%H:%M:%S") {
+                Ok(dt) => dt,
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        [("content-type", "text/plain")],
+                        format!("Invalid 'to': {e}"),
+                    ).into_response();
+                }
+            };
+            let idx = state.index.read();
+            dash::generate_vod_mpd(&idx, &camera_id, from_naive.and_utc(), to_naive.and_utc(), seg_dur)
+        }
+        _ => {
+            let idx = state.index.read();
+            dash::generate_live_mpd(&idx, &camera_id, seg_dur)
+        }
+    };
+
+    match mpd {
+        Some(m) => (
+            StatusCode::OK,
+            [("content-type", "application/dash+xml")],
+            m,
+        ).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            [("content-type", "text/plain")],
+            format!("No segments found for camera '{}'", camera_id),
         ).into_response(),
     }
 }

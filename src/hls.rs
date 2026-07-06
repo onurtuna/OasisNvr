@@ -5,11 +5,15 @@
 
 //! HLS playlist generation — live and VOD.
 //!
+//! Segments are self-initializing fMP4 fragments (own `ftyp+moov+moof+mdat`,
+//! produced by `splitmuxsink`/`mp4mux` — see `camera.rs`), so no separate
+//! `EXT-X-MAP` init segment is needed.
+//!
 //! Endpoints served via the HTTP API:
 //!   GET /api/hls/{camera_id}/live.m3u8              → live sliding-window playlist
 //!   GET /api/hls/{camera_id}/live.m3u8?_HLS_msn=N   → blocking reload until segment N
 //!   GET /api/hls/{camera_id}/vod.m3u8?from=...&to=...  → VOD playlist for time range
-//!   GET /api/hls/{camera_id}/segment/{segment_id}.ts   → raw MPEG-TS segment data
+//!   GET /api/hls/{camera_id}/segment/mp4/{segment_id}  → raw fMP4 segment data
 
 use std::fmt::Write as FmtWrite;
 
@@ -56,7 +60,7 @@ pub fn generate_live_playlist(
 
     let mut m3u8 = String::with_capacity(2048);
     writeln!(m3u8, "#EXTM3U").unwrap();
-    writeln!(m3u8, "#EXT-X-VERSION:3").unwrap();
+    writeln!(m3u8, "#EXT-X-VERSION:7").unwrap();
     writeln!(m3u8, "#EXT-X-TARGETDURATION:{}", segment_duration_secs).unwrap();
     writeln!(m3u8, "#EXT-X-MEDIA-SEQUENCE:{}", first_seq).unwrap();
 
@@ -89,7 +93,7 @@ pub fn generate_live_playlist(
         writeln!(m3u8, "#EXTINF:{:.3},", duration).unwrap();
         writeln!(
             m3u8,
-            "segment/ts/{}",
+            "segment/mp4/{}",
             seg.segment_id
         )
         .unwrap();
@@ -132,7 +136,7 @@ pub fn generate_vod_playlist(
 
     let mut m3u8 = String::with_capacity(2048);
     writeln!(m3u8, "#EXTM3U").unwrap();
-    writeln!(m3u8, "#EXT-X-VERSION:3").unwrap();
+    writeln!(m3u8, "#EXT-X-VERSION:7").unwrap();
     writeln!(m3u8, "#EXT-X-TARGETDURATION:{}", max_duration.ceil() as u64).unwrap();
     writeln!(m3u8, "#EXT-X-MEDIA-SEQUENCE:{}", first_seq).unwrap();
     writeln!(m3u8, "#EXT-X-PLAYLIST-TYPE:VOD").unwrap();
@@ -163,7 +167,7 @@ pub fn generate_vod_playlist(
         writeln!(m3u8, "#EXTINF:{:.3},", duration).unwrap();
         writeln!(
             m3u8,
-            "segment/ts/{}",
+            "segment/mp4/{}",
             seg.segment_id
         )
         .unwrap();
@@ -183,7 +187,7 @@ fn segment_actual_duration(seg: &SegmentMeta, fallback_secs: u64) -> f64 {
 fn empty_live_playlist(segment_duration_secs: u64) -> String {
     let mut m3u8 = String::with_capacity(256);
     writeln!(m3u8, "#EXTM3U").unwrap();
-    writeln!(m3u8, "#EXT-X-VERSION:3").unwrap();
+    writeln!(m3u8, "#EXT-X-VERSION:7").unwrap();
     writeln!(m3u8, "#EXT-X-TARGETDURATION:{}", segment_duration_secs).unwrap();
     writeln!(m3u8, "#EXT-X-MEDIA-SEQUENCE:0").unwrap();
     m3u8

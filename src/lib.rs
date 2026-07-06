@@ -6,6 +6,7 @@
 pub mod api;
 pub mod camera;
 pub mod config;
+pub mod dash;
 pub mod error;
 pub mod hls;
 pub mod ingestion;

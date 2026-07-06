@@ -40,6 +40,9 @@ pub struct RecordingManager {
     writer_tx: mpsc::Sender<WriteRequest>,
     /// Segment duration used when spawning new workers.
     segment_duration: Duration,
+    /// Base directory for short-lived per-camera segment fragment files
+    /// (written by `splitmuxsink`, read and deleted by the ingestion worker).
+    segment_tmp_dir: std::path::PathBuf,
 }
 
 struct WorkerEntry {
@@ -53,6 +56,17 @@ impl RecordingManager {
         let base = &config.storage.base_path;
         std::fs::create_dir_all(base)
             .map_err(|e| NvrError::Storage(format!("Cannot create base_path: {e}")))?;
+
+        // Short-lived per-segment fMP4 fragment files land here before the
+        // ingestion worker reads and deletes them. Wipe any orphans left
+        // over from a previous crash.
+        let segment_tmp_dir = base.join(".segment_tmp");
+        if segment_tmp_dir.exists() {
+            std::fs::remove_dir_all(&segment_tmp_dir)
+                .map_err(|e| NvrError::Storage(format!("Cannot clear segment temp dir: {e}")))?;
+        }
+        std::fs::create_dir_all(&segment_tmp_dir)
+            .map_err(|e| NvrError::Storage(format!("Cannot create segment temp dir: {e}")))?;
 
         let pool_bytes = config.storage.chunk_size_mb * 1024 * 1024;
         let segment_dur = Duration::from_secs(config.storage.segment_duration_secs);
@@ -77,7 +91,8 @@ impl RecordingManager {
         let mut workers = HashMap::new();
         for cam_cfg in &config.cameras {
             let worker = CameraWorker::new(cam_cfg.id.clone(), writer_tx.clone());
-            let handle = worker.spawn(cam_cfg.clone(), segment_dur);
+            let cam_tmp_dir = segment_tmp_dir.join(&cam_cfg.id);
+            let handle = worker.spawn(cam_cfg.clone(), segment_dur, cam_tmp_dir);
             info!(camera = cam_cfg.id, name = cam_cfg.name, "Camera registered");
             workers.insert(cam_cfg.id.clone(), WorkerEntry {
                 config: cam_cfg.clone(),
@@ -93,6 +108,7 @@ impl RecordingManager {
             pool: shared_pool,
             writer_tx,
             segment_duration: segment_dur,
+            segment_tmp_dir,
         })
     }
 
@@ -105,7 +121,8 @@ impl RecordingManager {
         }
 
         let worker = CameraWorker::new(cam_cfg.id.clone(), self.writer_tx.clone());
-        let handle = worker.spawn(cam_cfg.clone(), self.segment_duration);
+        let cam_tmp_dir = self.segment_tmp_dir.join(&cam_cfg.id);
+        let handle = worker.spawn(cam_cfg.clone(), self.segment_duration, cam_tmp_dir);
         info!(camera = cam_cfg.id, name = cam_cfg.name, "Camera added (hot)");
 
         self.workers.insert(cam_cfg.id.clone(), WorkerEntry {

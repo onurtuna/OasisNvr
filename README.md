@@ -4,6 +4,8 @@
 
 A high-performance Network Video Recorder written in Rust. Records RTSP streams from multiple IP cameras into pre-allocated binary pool files using a ring buffer strategy. Designed for HDD-based storage with sequential I/O optimization — **no SSD required**.
 
+Optimized for longer hardware life.
+
 ## Features
 
 - **Multi-camera support** — record from unlimited RTSP cameras simultaneously
@@ -13,8 +15,8 @@ A high-performance Network Video Recorder written in Rust. Records RTSP streams 
 - **Persistent index** — segment index rebuilt from pool files on restart, no data loss
 - **HTTP API** — status, segment listing, export, and live streaming via REST endpoints
 - **Rich Web Interface** — built-in offline-capable SPA dashboard for live viewing and VOD playback natively accessible at `http://localhost:8080/`
-- **LL-HLS live playback** — watch live or recorded video in any HLS-compatible player (VLC, Safari, HLS.js)
-- **VOD playback** — export any time range as `.ts` file or stream via HLS
+- **CMAF Support** — watch live or recorded video in any player
+- **VOD playback** — export any time range as `.mp4` file or stream
 - **Pool read safety** — per-pool atomic read locks prevent data corruption during concurrent read/write
 - **GStreamer pipeline** — robust RTSP ingestion with automatic reconnection
 - **Async architecture** — built on Tokio for efficient concurrency
@@ -45,11 +47,10 @@ All cameras share a single write queue. The writer appends records sequentially 
 | **HDD Seek Optimization** | ✅ One-way sequential write | Partial | ❌ None |
 | **HDD Friendly?** | ✅ Yes (Zero fragmentation, Sequential I/O) | ⚠️ Moderate (Frequent small writes) | ❌ No (Designed for SSDs) |
 | **AI / Object Detection** | ❌ None (Raw streams only) | ❌ None | ✅ Coral, GPU |
-| **Live Stream** | ✅ LL-HLS (VLC, Safari, HLS.js) | Partial | ✅ RTSP/WebRTC |
-| **VOD/Export** | ✅ .ts or HLS stream | ✅ MP4 | ✅ MP4 |
+| **Live Stream** | ✅ CMAF | Partial | ✅ RTSP/WebRTC |
+| **VOD/Export** | ✅ MP4 or CMAF stream | ✅ MP4 | ✅ MP4 |
 | **Runtime Camera Management**| ✅ Add/remove via API without restart | ❌ No | ❌ No |
 | **Advantages** | Ultimate performance, 0-config storage cleanup, extremely lightweight. | Mature, precise seeking, frame-level granularity. | Powerful automation, rich smart-alerts, AI integration. |
-| **Disadvantages** | No AI integration. | High disk I/O overhead for many cameras. | Very high CPU/RAM usage, complex setup. |
 | **License** | CC BY-NC 4.0 (Non-commercial) | Apache 2.0 | Apache 2.0 |
 
 ## Prerequisites

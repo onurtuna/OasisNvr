@@ -5,20 +5,20 @@
 
 //! Camera ingestion worker.
 //!
-//! Each `CameraWorker` task:
-//!  1. Pulls raw MPEG-TS buffers from the `CameraStream`.
-//!  2. Accumulates them until `segment_duration_secs` elapses.
-//!  3. Sends the accumulated bytes as a [`WriteRequest`] to the global
-//!     chunk writer through an `mpsc` channel.  NO direct disk writes.
+//! Each `CameraWorker` task pulls completed [`SegmentReady`] fragment files
+//! from the `CameraStream` (segment cutting itself is done by
+//! `splitmuxsink` in the GStreamer pipeline — see `camera.rs`), reads their
+//! bytes, deletes the temp file, and forwards them as a [`WriteRequest`] to
+//! the global chunk writer through an `mpsc` channel. NO direct disk writes
+//! to the pool from here.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
-use chrono::Utc;
 use tokio::sync::mpsc;
-use tokio::time::Instant;
 use tracing::{error, info, warn};
 
-use crate::camera::supervised_connect;
+use crate::camera::{supervised_connect, SegmentReady};
 use crate::config::CameraConfig;
 use crate::storage::global_writer::WriteRequest;
 
@@ -34,96 +34,33 @@ impl CameraWorker {
     }
 
     /// Spawn the ingestion loop as an async task.
-    pub fn spawn(self, config: CameraConfig, segment_duration: Duration) -> tokio::task::JoinHandle<()> {
+    pub fn spawn(
+        self,
+        config: CameraConfig,
+        segment_duration: Duration,
+        tmp_dir: PathBuf,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            self.run(config, segment_duration).await
+            self.run(config, segment_duration, tmp_dir).await
         })
     }
 
-    async fn run(self, config: CameraConfig, segment_duration: Duration) {
+    async fn run(self, config: CameraConfig, segment_duration: Duration, tmp_dir: PathBuf) {
         info!(camera = self.camera_id, "Ingestion worker started");
 
-        // Once the nominal segment duration elapses, keep recording until the
-        // next keyframe so every cut segment starts on a sync point (an
-        // MPEG-TS file that starts mid-GOP cannot be decoded from its first
-        // frame). This caps how long we're willing to wait for that keyframe
-        // before cutting anyway, bounding worst-case segment size.
-        let max_keyframe_wait = segment_duration;
-
         loop {
-            // Wait for a connected stream.
-            let Some(mut stream) = supervised_connect(&config).await else {
+            let Some(mut stream) = supervised_connect(&config, segment_duration, &tmp_dir).await else {
                 info!(camera = self.camera_id, "Stream supervisor shut down, exiting");
                 break;
             };
             info!(camera = self.camera_id, "Stream connected, recording");
 
-            let mut segment_buf: Vec<u8> = Vec::new();
-            let mut seg_start = Utc::now();
-            let mut deadline = Instant::now() + segment_duration;
-            let mut awaiting_keyframe = false;
-
             loop {
-                // Wait for the next buffer OR the current deadline.
-                let vbuf = tokio::select! {
-                    biased;
-                    _ = tokio::time::sleep_until(deadline) => None,
-                    buf = stream.read_buffer() => buf,
-                };
-
-                // If the nominal segment duration just elapsed, don't cut
-                // immediately — hold off until a keyframe arrives.
-                if !awaiting_keyframe && Instant::now() >= deadline {
-                    awaiting_keyframe = true;
-                    deadline = Instant::now() + max_keyframe_wait;
-                }
-
-                match vbuf {
-                    Some(vb) => {
-                        if awaiting_keyframe && vb.is_keyframe {
-                            // Cut right before this keyframe so the new
-                            // segment starts on a sync point.
-                            self.flush_segment(
-                                &mut segment_buf,
-                                seg_start,
-                                &mut seg_start,
-                                &mut deadline,
-                                segment_duration,
-                            ).await;
-                            awaiting_keyframe = false;
-                            deadline = Instant::now() + segment_duration;
-                        }
-                        segment_buf.extend_from_slice(&vb.data);
-                    }
+                match stream.read_segment().await {
+                    Some(seg) => self.forward_segment(seg).await,
                     None => {
-                        if !awaiting_keyframe {
-                            // Deadline hadn't elapsed, so this can only mean
-                            // the stream/channel closed.
-                            if !segment_buf.is_empty() {
-                                self.flush_segment(
-                                    &mut segment_buf,
-                                    seg_start,
-                                    &mut seg_start,
-                                    &mut deadline,
-                                    segment_duration,
-                                ).await;
-                            }
-                            warn!(camera = self.camera_id, "Stream closed, waiting for reconnect");
-                            break;
-                        }
-
-                        // Hard deadline: no keyframe arrived in time, cut anyway.
-                        if !segment_buf.is_empty() {
-                            self.flush_segment(
-                                &mut segment_buf,
-                                seg_start,
-                                &mut seg_start,
-                                &mut deadline,
-                                segment_duration,
-                            ).await;
-                        }
-                        awaiting_keyframe = false;
-                        deadline = Instant::now() + segment_duration;
+                        warn!(camera = self.camera_id, "Stream closed, waiting for reconnect");
+                        break;
                     }
                 }
             }
@@ -132,26 +69,39 @@ impl CameraWorker {
         error!(camera = self.camera_id, "Ingestion worker exited");
     }
 
-    /// Send accumulated buffer as a [`WriteRequest`] to the global writer.
-    async fn flush_segment(
-        &self,
-        buf: &mut Vec<u8>,
-        seg_start: chrono::DateTime<Utc>,
-        next_start: &mut chrono::DateTime<Utc>,
-        deadline: &mut Instant,
-        segment_duration: Duration,
-    ) {
-        if buf.is_empty() {
-            return;
-        }
-        let seg_end = Utc::now();
-        let data = std::mem::take(buf);
-        let bytes = data.len();
+    /// Read a completed fragment file's bytes, delete it, and hand it off
+    /// to the global writer as a [`WriteRequest`].
+    async fn forward_segment(&self, seg: SegmentReady) {
+        // `splitmuxsink` runs with `async-finalize=true` (see camera.rs) so
+        // the *previous* fragment's file may still be getting its trailing
+        // moov/mfra flushed in the background when we're notified about it.
+        // Wait for its size to stop changing before reading — the residual
+        // write is tiny (a few KB of trailer) so this settles almost
+        // immediately in practice.
+        self.wait_for_file_stable(&seg.path).await;
 
+        let data = match tokio::fs::read(&seg.path).await {
+            Ok(d) => d,
+            Err(e) => {
+                error!(
+                    camera = self.camera_id,
+                    path = ?seg.path,
+                    error = %e,
+                    "Failed to read completed segment file, dropping"
+                );
+                return;
+            }
+        };
+
+        if let Err(e) = tokio::fs::remove_file(&seg.path).await {
+            warn!(camera = self.camera_id, path = ?seg.path, error = %e, "Failed to remove temp segment file");
+        }
+
+        let bytes = data.len();
         let req = WriteRequest {
             camera_id: self.camera_id.clone(),
-            start_ts: seg_start,
-            end_ts: seg_end,
+            start_ts: seg.start_ts,
+            end_ts: seg.end_ts,
             data,
         };
 
@@ -160,8 +110,8 @@ impl CameraWorker {
                 info!(
                     camera = self.camera_id,
                     bytes,
-                    start = %seg_start,
-                    end = %seg_end,
+                    start = %seg.start_ts,
+                    end = %seg.end_ts,
                     "Segment queued for global writer"
                 );
             }
@@ -169,8 +119,31 @@ impl CameraWorker {
                 error!(camera = self.camera_id, "Global writer channel closed, segment dropped");
             }
         }
+    }
 
-        *next_start = Utc::now();
-        *deadline = Instant::now() + segment_duration;
+    /// Poll a file's size until it stops changing (bounded), so we don't
+    /// read it while `splitmuxsink`'s async finalization is still writing
+    /// its trailing boxes.
+    async fn wait_for_file_stable(&self, path: &std::path::Path) {
+        const POLL_INTERVAL: Duration = Duration::from_millis(100);
+        const MAX_ATTEMPTS: u32 = 30; // up to ~3s
+
+        let mut last_size = match tokio::fs::metadata(path).await {
+            Ok(m) => m.len(),
+            Err(_) => return, // Let the subsequent read report the error.
+        };
+
+        for _ in 0..MAX_ATTEMPTS {
+            tokio::time::sleep(POLL_INTERVAL).await;
+            let size = match tokio::fs::metadata(path).await {
+                Ok(m) => m.len(),
+                Err(_) => return,
+            };
+            if size == last_size {
+                return;
+            }
+            last_size = size;
+        }
+        warn!(camera = self.camera_id, ?path, "Segment file size still changing after max wait, reading anyway");
     }
 }

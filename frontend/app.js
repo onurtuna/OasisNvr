@@ -418,7 +418,7 @@ els.btnPlayVod.addEventListener('click', () => {
 });
 
 
-// Export VOD (Download .ts)
+// Export VOD (Download .mp4)
 els.btnDownloadVod.addEventListener('click', () => {
     const camId = els.recCamSelect.value;
     const fromVal = els.recDateFrom.value;

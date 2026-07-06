@@ -28,9 +28,10 @@ cam1 ──┐                                                    ┌─ /api/st
 cam2 ──┤  mpsc channel  →  GlobalChunkWriter  →  pool_XXX   ├─ /api/list
 cam3 ──┤                         │                .bin      ├─ /api/export
 cam4 ──┘                         ▼                          ├─ /api/hls/.../live.m3u8
-  ↕                        SegmentIndex (RAM)               ├─ /api/cameras (GET/POST/DELETE)
-POST/DELETE                      ▲                          └─ /api/hls/.../vod.m3u8
-/api/cameras          rebuilt from pool files on startup
+  ↕                        SegmentIndex (RAM)               ├─ /api/hls/.../vod.m3u8
+POST/DELETE                      ▲                          ├─ /api/dash/.../manifest.mpd
+/api/cameras          rebuilt from pool files on startup     ├─ /api/cameras (GET/POST/DELETE)
+                                                              └─ /api/login
 ```
 
 All cameras share a single write queue. The writer appends records sequentially into pre-allocated pool files — the HDD head only moves forward. The HTTP API reads segments directly from pool files using per-pool read guards.
@@ -67,7 +68,7 @@ sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 ```
 
-> **Windows kullanıcısı mısın?** GStreamer'ı native (MSVC) kurup Rust ile derlemek yerine, aşağıdaki [Windows Setup (Docker)](#windows-setup-docker---önerilen-yöntem) bölümünü kullan. Tek gereksinim Docker Desktop.
+> **On Windows?** Instead of natively installing GStreamer (MSVC) and building with Rust, use the [Windows Setup (Docker)](#windows-setup-docker--recommended) section below. The only requirement is Docker Desktop.
 
 ## Quick Start
 
@@ -83,84 +84,84 @@ cp config.example.toml config.toml
 cargo run --release -- record --config config.toml
 ```
 
-## Windows Setup (Docker — Önerilen Yöntem)
+## Windows Setup (Docker — Recommended)
 
-Windows'ta `gstreamer-rs` crate'ini native olarak derlemek (MSVC toolchain + GStreamer development kit + `pkg-config`/ortam değişkenleri kurulumu) oldukça zahmetlidir. Bunun yerine proje zaten bir `Dockerfile` ve `docker-compose.yml` içeriyor — GStreamer ve Rust container içinde hazır geldiği için Windows'a **hiçbir şey kurmana gerek yok**, sadece Docker Desktop yeterli.
+Natively building the `gstreamer-rs` crate on Windows (MSVC toolchain + GStreamer development kit + `pkg-config`/environment variable setup) is quite tedious. Instead, the project already ships a `Dockerfile` and `docker-compose.yml` — GStreamer and Rust come ready-made inside the container, so **you don't need to install anything on Windows** except Docker Desktop.
 
-### 1. Docker Desktop'ı kur ve başlat
+### 1. Install and start Docker Desktop
 
-1. [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) üzerinden Docker Desktop'ı indir ve kur (kurulum sırasında **WSL 2 backend** seçeneğini işaretli bırak — varsayılan budur).
-2. Kurulum bitince Windows'u yeniden başlat (isteniyorsa).
-3. Docker Desktop uygulamasını aç ve sol altta **"Engine running"** yazısını görene kadar bekle. İlk açılışta Docker kendi WSL2 alt sistemlerini (`docker-desktop`, `docker-desktop-data`) otomatik kurar, ekstra bir Linux dağıtımı kurmana gerek yoktur.
-4. Doğrulamak için bir terminalde:
+1. Download and install Docker Desktop from [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) (leave the **WSL 2 backend** option checked during setup — it's the default).
+2. Restart Windows after installation if prompted.
+3. Open the Docker Desktop app and wait until you see **"Engine running"** in the bottom left. On first launch, Docker automatically sets up its own WSL2 subsystems (`docker-desktop`, `docker-desktop-data`) — you don't need to install an extra Linux distro.
+4. To verify, in a terminal:
    ```powershell
    docker version
    docker compose version
    ```
-   İkisi de sürüm bilgisi döndürmeli (hata değil).
+   Both should return version info (not an error).
 
-### 2. Projeyi hazırla
+### 2. Prepare the project
 
-Proje klasöründe (bu depo) bir PowerShell açıp:
+Open a PowerShell in the project folder (this repo):
 
 ```powershell
-# Örnek config'i kopyala
+# Copy the example config
 copy config.example.toml config.toml
 
-# Kendi kamera RTSP URL'lerinle düzenle
+# Edit it with your camera RTSP URLs
 notepad config.toml
 ```
 
-`config.toml` içinde en az şunları güncelle:
+In `config.toml`, update at least the following:
 
-- `[[cameras]]` bloklarındaki `url = "rtsp://..."` adreslerini kendi kameralarınla değiştir (kullanıcı adı/şifre varsa `rtsp://user:pass@ip:port/yol` formatında).
-- `storage.base_path` — container içinde bu her zaman `./recordings` olarak kalabilir; Windows tarafında hangi diske yazılacağını `docker-compose.yml`'daki `volumes` ile ayarlıyoruz (aşağıya bak).
+- Replace the `url = "rtsp://..."` addresses in the `[[cameras]]` blocks with your own cameras (format `rtsp://user:pass@ip:port/path` if there's a username/password).
+- `storage.base_path` — inside the container this can always stay `./recordings`; which Windows disk it actually writes to is set via `volumes` in `docker-compose.yml` (see below).
 
-Kayıtların hangi Windows diskine/klasörüne yazılacağını belirlemek için `docker-compose.yml` dosyasını aç ve gerekirse `./recordings` yolunu değiştir (örn. ayrı bir HDD kullanmak istersen):
+To decide which Windows disk/folder recordings are written to, open `docker-compose.yml` and change the `./recordings` path if needed (e.g. to use a separate HDD):
 
 ```yaml
 volumes:
-  - D:/nvr-recordings:/app/recordings   # örn. ayrı bir HDD/klasör
+  - D:/nvr-recordings:/app/recordings   # e.g. a separate HDD/folder
   - ./config.toml:/app/config.toml:ro
 ```
 
-### 3. Build & çalıştır
+### 3. Build & run
 
 ```powershell
-# İlk kurulumda image'ı derle ve arka planda başlat
+# Build the image and start in the background on first setup
 docker compose up --build -d
 
-# Logları izle
+# Watch the logs
 docker compose logs -f
 
-# Durdur
+# Stop
 docker compose down
 
-# Config veya kod değiştirdikten sonra yeniden derleyip başlat
+# Rebuild and restart after changing config or code
 docker compose up --build -d
 ```
 
-### 4. Kullan
+### 4. Use it
 
-Tarayıcıdan `http://localhost:8080/` adresine git — kontrol panelini görmelisin. Windows Güvenlik Duvarı ilk bağlantıda izin isteyebilir, "İzin ver"e bas.
+Go to `http://localhost:8080/` in your browser — you should see the dashboard. Windows Firewall may ask for permission on the first connection — click "Allow".
 
-### Native (Rust + GStreamer) ile geliştirme yapacaksan
+### If you want to develop natively (Rust + GStreamer)
 
-`cargo run`/`cargo build` ile doğrudan Windows üzerinde çalıştırmak istersen (debug için), ekstra olarak şunlar gerekir — bu yol Docker'dan çok daha karmaşıktır:
+If you want to run directly on Windows with `cargo run`/`cargo build` (for debugging), you'll additionally need the following — this path is much more complex than Docker:
 
-1. [Rust'ı kur](https://rustup.rs/) (MSVC toolchain, `rustup-init.exe` varsayılanı seçer).
-2. [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) — "Desktop development with C++" iş yükü (MSVC linker için gerekli).
-3. [GStreamer MSVC development installer](https://gstreamer.freedesktop.org/download/#windows) — hem **runtime** hem **development** MSVC 64-bit paketlerini kur.
-4. Kurulumdan sonra ortam değişkenlerini ayarla (kalıcı yapmak için Sistem Ortam Değişkenleri'nden):
+1. [Install Rust](https://rustup.rs/) (MSVC toolchain, `rustup-init.exe`'s default choice).
+2. [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) — the "Desktop development with C++" workload (required for the MSVC linker).
+3. [GStreamer MSVC development installer](https://gstreamer.freedesktop.org/download/#windows) — install both the **runtime** and **development** MSVC 64-bit packages.
+4. After installation, set the environment variables (set them via System Environment Variables to make them permanent):
    ```powershell
    $env:GSTREAMER_1_0_ROOT_MSVC_X86_64 = "C:\gstreamer\1.0\msvc_x86_64\"
    $env:PATH += ";$env:GSTREAMER_1_0_ROOT_MSVC_X86_64\bin"
    $env:PKG_CONFIG_PATH = "$env:GSTREAMER_1_0_ROOT_MSVC_X86_64\lib\pkgconfig"
    ```
-5. Yeni bir terminal aç ve doğrula: `gst-launch-1.0.exe --version`
-6. Sonra normal `cargo build --release` / `cargo run --release -- record --config config.toml` adımlarını izleyebilirsin.
+5. Open a new terminal and verify: `gst-launch-1.0.exe --version`
+6. Then you can follow the usual `cargo build --release` / `cargo run --release -- record --config config.toml` steps.
 
-Bu yol test edilmemiştir (Docker yöntemi önerilir); sorun yaşarsan `pkg-config` hatalarının çoğu yukarıdaki ortam değişkenlerinin eksik/yanlış olmasından kaynaklanır.
+This path is untested (the Docker method is recommended); if you run into issues, most `pkg-config` errors are caused by the environment variables above being missing or incorrect.
 
 ## Built-in Web Interface
 
@@ -175,15 +176,18 @@ While recording, the HTTP API is also available at `http://localhost:8080`:
 |---|---|
 | `GET /api/status` | System status — pools, segments, cameras (JSON) |
 | `GET /api/list?camera=cam1` | Segment list for a camera (JSON) |
-| `GET /api/export?camera=cam1&from=...&to=...` | Download `.ts` file for a time range |
-| `GET /api/hls/{camera}/live.m3u8` | HLS live playlist |
-| `GET /api/hls/{camera}/vod.m3u8?from=...&to=...` | VOD playlist for a time range |
-| `GET /api/hls/{camera}/segment/ts/{id}` | Individual segment data (MPEG-TS) |
+| `GET /api/export?camera=cam1&from=...&to=...` | Download `.mp4` file for a time range |
+| `GET /api/hls/{camera}/live.m3u8` | HLS live playlist (LL-HLS, supports `?_HLS_msn=N` blocking reload) |
+| `GET /api/hls/{camera}/vod.m3u8?from=...&to=...` | HLS VOD playlist for a time range |
+| `GET /api/hls/{camera}/segment/mp4/{id}` | Individual segment data (fMP4) |
 | `GET /api/hls/{camera}/player` | 🖥 Live video player (browser) |
 | `GET /api/hls/{camera}/vod/player?from=...&to=...` | 🖥 VOD video player (browser) |
-| `GET /api/cameras` | List active cameras |
+| `GET /api/dash/{camera}/manifest.mpd` | DASH live manifest |
+| `GET /api/dash/{camera}/manifest.mpd?from=...&to=...` | DASH VOD manifest for a time range |
+| `GET /api/cameras` | List active and historical cameras |
 | `POST /api/cameras` | Add a camera at runtime (JSON body) |
 | `DELETE /api/cameras/{id}` | Remove a camera at runtime |
+| `POST /api/login` | Web UI login (`{"username": "...", "password": "..."}`) |
 
 ### Examples
 
@@ -197,6 +201,10 @@ open "http://localhost:8080/api/hls/cam1/vod/player?from=2026-02-19T23:00:00&to=
 # ── VLC playback ──────────────────────────────────────────────────
 vlc http://localhost:8080/api/hls/cam1/live.m3u8
 vlc "http://localhost:8080/api/hls/cam1/vod.m3u8?from=2026-02-19T23:00:00&to=2026-02-19T23:01:00"
+
+# ── DASH playback (live and VOD manifest) ─────────────────────────
+vlc http://localhost:8080/api/dash/cam1/manifest.mpd
+vlc "http://localhost:8080/api/dash/cam1/manifest.mpd?from=2026-02-19T23:00:00&to=2026-02-19T23:01:00"
 
 # ── System status ─────────────────────────────────────────────────
 curl http://localhost:8080/api/status | jq

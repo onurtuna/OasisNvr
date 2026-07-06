@@ -14,11 +14,12 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::error::{NvrError, Result};
 use crate::storage::chunk_pool::ChunkPool;
@@ -89,6 +90,11 @@ pub fn export_range(
 /// sequentially (not as separate simultaneous tracks) into one fresh
 /// `mp4mux`. Built via explicit element construction (not a `parse::launch`
 /// string) since segment/camera-derived paths could otherwise need escaping.
+///
+/// The parser between `concat` and `mp4mux` depends on the codec the
+/// segments were recorded with, which isn't known until the first segment is
+/// demuxed — all segments in one export share a camera (and therefore a
+/// codec), so it's resolved once, lazily, from the first video pad seen.
 fn remux_segments(seg_paths: &[PathBuf], output_path: &Path) -> Result<()> {
     let pipeline = gst::Pipeline::new();
 
@@ -99,27 +105,23 @@ fn remux_segments(seg_paths: &[PathBuf], output_path: &Path) -> Result<()> {
     };
 
     let concat = make("concat")?;
-    let h264parse = make("h264parse")?;
     let mp4mux = make("mp4mux")?;
     let filesink = gst::ElementFactory::make("filesink")
         .property("location", output_path.to_string_lossy().as_ref())
         .build()
         .map_err(|e| NvrError::GStreamer(format!("create filesink: {e}")))?;
 
-    for el in [&concat, &h264parse, &mp4mux, &filesink] {
+    for el in [&concat, &mp4mux, &filesink] {
         pipeline
             .add(el)
             .map_err(|e| NvrError::GStreamer(format!("add element: {e}")))?;
     }
-    concat
-        .link(&h264parse)
-        .map_err(|e| NvrError::GStreamer(format!("link concat->h264parse: {e}")))?;
-    h264parse
-        .link(&mp4mux)
-        .map_err(|e| NvrError::GStreamer(format!("link h264parse->mp4mux: {e}")))?;
     mp4mux
         .link(&filesink)
         .map_err(|e| NvrError::GStreamer(format!("link mp4mux->filesink: {e}")))?;
+
+    // Built once, the first time a video pad's caps tell us the codec.
+    let parser: Arc<Mutex<Option<gst::Element>>> = Arc::new(Mutex::new(None));
 
     for seg_path in seg_paths {
         let filesrc = gst::ElementFactory::make("filesrc")
@@ -142,10 +144,62 @@ fn remux_segments(seg_paths: &[PathBuf], output_path: &Path) -> Result<()> {
             .request_pad_simple("sink_%u")
             .ok_or_else(|| NvrError::GStreamer("concat: no sink pad available".into()))?;
 
+        let pipeline_for_pad = pipeline.clone();
+        let concat_for_pad = concat.clone();
+        let mp4mux_for_pad = mp4mux.clone();
+        let parser_for_pad = parser.clone();
         qtdemux.connect_pad_added(move |_demux, src_pad| {
-            if src_pad.name().starts_with("video") {
-                let _ = src_pad.link(&concat_sink);
+            if !src_pad.name().starts_with("video") {
+                return;
             }
+            let _ = src_pad.link(&concat_sink);
+
+            let mut guard = parser_for_pad.lock().unwrap();
+            if guard.is_some() {
+                return;
+            }
+
+            let Some(caps) = src_pad.current_caps() else {
+                error!("Exported video pad has no negotiated caps, cannot pick a parser");
+                return;
+            };
+            let Some(s) = caps.structure(0) else {
+                error!("Exported video pad caps have no structure, cannot pick a parser");
+                return;
+            };
+            let parse_factory = match s.name().as_str() {
+                "video/x-h264" => "h264parse",
+                "video/x-av1" => "av1parse",
+                other => {
+                    error!(codec = other, "Unsupported recorded video codec, cannot export");
+                    return;
+                }
+            };
+
+            let parse_el = match gst::ElementFactory::make(parse_factory).build() {
+                Ok(el) => el,
+                Err(e) => {
+                    error!(factory = parse_factory, error = %e, "Failed to create parser");
+                    return;
+                }
+            };
+            if let Err(e) = pipeline_for_pad.add(&parse_el) {
+                error!(error = %e, "Failed to add parser to pipeline");
+                return;
+            }
+            if let Err(e) = parse_el.sync_state_with_parent() {
+                error!(error = %e, "Failed to sync parser state with pipeline");
+                return;
+            }
+            if let Err(e) = concat_for_pad.link(&parse_el) {
+                error!(error = %e, "Failed to link concat->parser");
+                return;
+            }
+            if let Err(e) = parse_el.link(&mp4mux_for_pad) {
+                error!(error = %e, "Failed to link parser->mp4mux");
+                return;
+            }
+            *guard = Some(parse_el);
         });
     }
 

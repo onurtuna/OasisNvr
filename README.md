@@ -50,6 +50,7 @@ All cameras share a single write queue. The writer appends records sequentially 
 | **AI / Object Detection** | ❌ None (Raw streams only) | ❌ None | ✅ Coral, GPU |
 | **Live Stream** | ✅ CMAF | Partial | ✅ RTSP/WebRTC |
 | **VOD/Export** | ✅ MP4 or CMAF stream | ✅ MP4 | ✅ MP4 |
+| **AV1 Camera Support** | ✅ Auto-detected per camera, recorded natively (no re-encode) | ❌ H.264 only (no H.265 either) | ⚠️ Only via optional HW transcode of recordings, not native camera ingest |
 | **Runtime Camera Management**| ✅ Add/remove via API without restart | ❌ No | ❌ No |
 | **Advantages** | Ultimate performance, 0-config storage cleanup, extremely lightweight. | Mature, precise seeking, frame-level granularity. | Powerful automation, rich smart-alerts, AI integration. |
 | **License** | CC BY-NC 4.0 (Non-commercial) | Apache 2.0 | Apache 2.0 |
@@ -57,16 +58,23 @@ All cameras share a single write queue. The writer appends records sequentially 
 ## Prerequisites
 
 - **Rust** 1.70+
-- **GStreamer** with H.264 plugins
+- **GStreamer** with H.264 and AV1 plugins. Codec is auto-detected per camera from
+  the RTSP stream, so both can be used at once.
 
 ```bash
 # macOS (My implementation environment)
-brew install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly
+brew install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-plugins-rs
 
 # Ubuntu / Debian (Not Tested)
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 ```
+
+> AV1 needs `rtpav1depay`, which isn't packaged by Debian/Ubuntu at all — it only
+> exists as [gst-plugins-rs](https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs)
+> Rust source. On Homebrew it's covered by the `gst-plugins-rs` formula above; on
+> Debian/Ubuntu (and in the project's own `Dockerfile`) it's built from source via
+> `cargo-c` — see the `Dockerfile` for the exact build/install commands.
 
 > **On Windows?** Instead of natively installing GStreamer (MSVC) and building with Rust, use the [Windows Setup (Docker)](#windows-setup-docker--recommended) section below. The only requirement is Docker Desktop.
 

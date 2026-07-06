@@ -6,7 +6,14 @@
 //! Camera stream abstraction using GStreamer.
 //!
 //! Each camera runs a GStreamer pipeline:
-//!   rtspsrc → rtph264depay → h264parse → splitmuxsink(mp4mux)
+//!   rtspsrc → (depay → parse, chosen at runtime from the negotiated RTP
+//!   encoding) → splitmuxsink(mp4mux)
+//!
+//! The depayloader/parser pair isn't known until `rtspsrc` negotiates the
+//! stream's RTP caps with the camera, so it's wired up dynamically from the
+//! `pad-added` signal instead of being part of a static pipeline string.
+//! Currently supported encodings: H264 (`rtph264depay ! h264parse`) and AV1
+//! (`rtpav1depay ! av1parse`).
 //!
 //! `splitmuxsink` owns segment cutting: it always splits at the next
 //! keyframe at/after `max-size-time`, so every resulting fragment file is a
@@ -89,10 +96,13 @@ impl CameraStream {
 
         let (tx, rx) = mpsc::channel::<SegmentReady>(32);
 
+        // rtspsrc and splitmuxsink are declared here, unlinked — the
+        // depay/parse chain between them depends on the RTP encoding
+        // negotiated at connect time, so it's built dynamically below from
+        // rtspsrc's `pad-added` signal instead of being part of this string.
         let max_size_time_ns = segment_duration.as_nanos() as u64;
         let pipeline_str = format!(
-            "rtspsrc location={url} latency=200 protocols=tcp ! \
-             rtph264depay ! h264parse config-interval=-1 ! \
+            "rtspsrc name=src location={url} latency=200 protocols=tcp \
              splitmuxsink name=splitmux max-size-time={max_size_time_ns} send-keyframe-requests=true",
             url = config.url
         );
@@ -102,6 +112,9 @@ impl CameraStream {
             .downcast::<gst::Pipeline>()
             .map_err(|_| NvrError::GStreamer("Not a pipeline".into()))?;
 
+        let rtspsrc = pipeline
+            .by_name("src")
+            .ok_or_else(|| NvrError::GStreamer("rtspsrc not found".into()))?;
         let splitmux = pipeline
             .by_name("splitmux")
             .ok_or_else(|| NvrError::GStreamer("splitmuxsink not found".into()))?;
@@ -123,6 +136,98 @@ impl CameraStream {
         splitmux.set_property("async-finalize", true);
         splitmux.set_property("muxer-factory", "mp4mux");
         splitmux.set_property("muxer-properties", &muxer_props);
+
+        // The depay/parse chain depends on the codec the camera actually
+        // negotiates over RTSP, which isn't known until `rtspsrc` creates its
+        // (sometimes) src pad for the stream. Build and link it dynamically
+        // here rather than assuming H264 up front.
+        let pipeline_for_pad = pipeline.clone();
+        let splitmux_for_pad = splitmux.clone();
+        let camera_id_for_pad = config.id.clone();
+        rtspsrc.connect_pad_added(move |_src, pad| {
+            let Some(caps) = pad.current_caps() else {
+                warn!(camera = camera_id_for_pad, "rtspsrc pad has no negotiated caps yet, ignoring");
+                return;
+            };
+            let Some(s) = caps.structure(0) else {
+                warn!(camera = camera_id_for_pad, "rtspsrc pad caps have no structure, ignoring");
+                return;
+            };
+
+            // Only the video media is recorded; silently ignore any other
+            // pad (e.g. an audio track) rather than treating it as an error.
+            if s.get::<String>("media").ok().as_deref() != Some("video") {
+                return;
+            }
+
+            let encoding_name = s.get::<String>("encoding-name").ok();
+            let (depay_factory, parse_factory) = match encoding_name.as_deref() {
+                Some("H264") => ("rtph264depay", "h264parse"),
+                Some("AV1") => ("rtpav1depay", "av1parse"),
+                other => {
+                    error!(
+                        camera = camera_id_for_pad,
+                        encoding = ?other,
+                        "Unsupported video RTP encoding, cannot record this camera"
+                    );
+                    return;
+                }
+            };
+
+            let make = |factory: &str| -> Option<gst::Element> {
+                match gst::ElementFactory::make(factory).build() {
+                    Ok(el) => Some(el),
+                    Err(e) => {
+                        error!(camera = camera_id_for_pad, factory, error = %e, "Failed to create element");
+                        None
+                    }
+                }
+            };
+
+            let (Some(depay), Some(parse)) = (make(depay_factory), make(parse_factory)) else {
+                return;
+            };
+            if parse_factory == "h264parse" {
+                parse.set_property("config-interval", -1i32);
+            }
+
+            for el in [&depay, &parse] {
+                if let Err(e) = pipeline_for_pad.add(el) {
+                    error!(camera = camera_id_for_pad, error = %e, "Failed to add element to pipeline");
+                    return;
+                }
+                if let Err(e) = el.sync_state_with_parent() {
+                    error!(camera = camera_id_for_pad, error = %e, "Failed to sync element state with pipeline");
+                    return;
+                }
+            }
+
+            if let Err(e) = depay.link(&parse) {
+                error!(camera = camera_id_for_pad, error = %e, "Failed to link depayloader to parser");
+                return;
+            }
+
+            let Some(depay_sink) = depay.static_pad("sink") else {
+                error!(camera = camera_id_for_pad, "depayloader has no sink pad");
+                return;
+            };
+            if let Err(e) = pad.link(&depay_sink) {
+                error!(camera = camera_id_for_pad, error = ?e, "Failed to link rtspsrc pad to depayloader");
+                return;
+            }
+
+            let Some(splitmux_sink) = splitmux_for_pad.request_pad_simple("video") else {
+                error!(camera = camera_id_for_pad, "splitmuxsink has no video pad available");
+                return;
+            };
+            let Some(parse_src) = parse.static_pad("src") else {
+                error!(camera = camera_id_for_pad, "parser has no src pad");
+                return;
+            };
+            if let Err(e) = parse_src.link(&splitmux_sink) {
+                error!(camera = camera_id_for_pad, error = ?e, "Failed to link parser to splitmuxsink");
+            }
+        });
 
         let state = Arc::new(Mutex::new(FragmentState {
             current_path: None,

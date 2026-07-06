@@ -6,7 +6,7 @@ description = "Network Video Recorder with ring buffer storage"
 authors = []
 
 [[bin]]
-name = "nvr"
+name = "oasis_nvr"
 path = "src/main.rs"
 
 [lib]
